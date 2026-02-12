@@ -20,6 +20,7 @@ __all__ = [
     "EvtPacketReceived",
     "EvtNewRawCameraImage",
     "EvtAnnotatedCameraImage",
+    "EvtCubeDetectorDebugImages",
     "EvtRobotMovingChange",
     "EvtRobotCarryingBlockChange",
     "EvtRobotPickingOrPlacingChange",
@@ -87,6 +88,16 @@ class EvtAnnotatedCameraImage(Event):
 
     Attributes:
         image: PIL Image with detection boxes and labels
+        detections: List of CubeDetection objects
+    """
+
+
+class EvtCubeDetectorDebugImages(Event):
+    """
+    Triggered when debug images from cube detection pipeline are available.
+
+    Attributes:
+        debug_images: Dict of {step_name: image_array} containing intermediate images
         detections: List of CubeDetection objects
     """
 

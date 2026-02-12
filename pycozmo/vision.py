@@ -21,12 +21,12 @@ from .camera_calibration import CameraCalibration
 # Import CubeFusionTracker
 try:
     from .cubeDetector.cubeDetector import CubeFusionTracker, CozmoCubeDetector
+
     CUBE_DETECTOR_AVAILABLE = True
 except ImportError:
     CUBE_DETECTOR_AVAILABLE = False
     logger.error("cubeDetector module is required but not available")
     raise
-
 
 __all__ = [
     "CubeDetection",
@@ -121,11 +121,12 @@ class VisionProcessor:
             self.camera_calibration.camera_matrix,
             self.camera_calibration.distortion_coefficients,
             target_markers,
-            downscale_factor=1.0,
             use_clahe=True,
             max_detections=3,  # Cozmo has 3 cubes
-            denoise_strength=10  # Enable noise reduction for poor quality camera
+            denoise_strength=0  # Enable noise reduction for poor quality camera
         )
+
+        self.cube_detector.set_debug(True)
 
         # Create fusion tracker
         self.cube_tracker = CubeFusionTracker(
@@ -184,8 +185,9 @@ class VisionProcessor:
             # Convert RGB to BGR for OpenCV
             img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
 
-            # Auto-brightness adjustment for dark images
-            img_bgr = self._auto_brightness_contrast(img_bgr)
+            # Save raw frame for debug
+            if self.cube_detector.debug:
+                self.cube_detector.debug_images['original'] = img_bgr.copy()
 
             # Detect marker faces
             results = self.cube_detector.detect(img_bgr)
@@ -232,36 +234,6 @@ class VisionProcessor:
             logger.error(f"Error in cube detection: {e}", exc_info=True)
             return []
 
-    def _auto_brightness_contrast(self, image: np.ndarray) -> np.ndarray:
-        """
-        Automatically adjust brightness and contrast for dark images using CLAHE.
-
-        CLAHE (Contrast Limited Adaptive Histogram Equalization) improves local contrast
-        and enhances details in both bright and dark areas of the image. This is particularly
-        useful for cube detection in varying lighting conditions.
-
-        Args:
-            image: Input BGR image
-
-        Returns:
-            Brightness/contrast adjusted image
-        """
-        # Convert to LAB color space for better brightness adjustment
-        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-
-        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to L channel
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        l_clahe = clahe.apply(l)
-
-        # Merge channels back
-        lab_clahe = cv2.merge((l_clahe, a, b))
-
-        # Convert back to BGR
-        result = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
-
-        return result
-
     def reset_tracking(self):
         """Reset the cube tracking state."""
         if self.cube_tracker:
@@ -270,9 +242,9 @@ class VisionProcessor:
 
     # Annotation settings
     annotation_colors = [
-        (255, 0, 0),    # Red
-        (0, 255, 0),    # Green
-        (0, 0, 255),    # Blue
+        (255, 0, 0),  # Red
+        (0, 255, 0),  # Green
+        (0, 0, 255),  # Blue
         (255, 255, 0),  # Yellow
         (255, 0, 255),  # Magenta
         (0, 255, 255),  # Cyan
@@ -359,7 +331,8 @@ class VisionProcessor:
 
         return annotated_image
 
-    def detect_and_annotate(self, image: Image.Image, head_angle_rad: float = 0.0) -> Tuple[List[CubeDetection], Image.Image]:
+    def detect_and_annotate(self, image: Image.Image, head_angle_rad: float = 0.0) -> Tuple[
+        List[CubeDetection], Image.Image]:
         """
         Detect cubes and return both detections and an annotated image.
 
@@ -419,7 +392,7 @@ class AnnotatedVisionProcessor(VisionProcessor):
         self.client.add_handler(event.EvtNewRawCameraImage, self._on_camera_image)
 
         logger.info(f"Annotated vision processor initialized (processing every "
-                   f"{process_every_n_frames} frame{'s' if process_every_n_frames > 1 else ''})")
+                    f"{process_every_n_frames} frame{'s' if process_every_n_frames > 1 else ''})")
 
     def _on_camera_image(self, cli, image: Image.Image):
         """
@@ -445,6 +418,10 @@ class AnnotatedVisionProcessor(VisionProcessor):
 
             # Dispatch annotated image event
             self.client.dispatch(event.EvtAnnotatedCameraImage, cli, annotated_image, detections)
+
+            # Dispatch debug images event
+            debug_images = self.cube_detector.get_debug_images()
+            self.client.dispatch(event.EvtCubeDetectorDebugImages, cli, debug_images, detections)
 
             # Also handle cube detection events
             self._dispatch_cube_events(cli, detections)

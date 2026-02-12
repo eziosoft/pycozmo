@@ -312,14 +312,18 @@ class CubeFusionTracker:
 
 
 class CozmoCubeDetector:
-    def __init__(self, camera_matrix, dist_coeffs, target_markers, square_size_mm=20.0, score_threshold=0.6,
-                 downscale_factor=1.0, use_clahe=True, max_detections=None, min_area=100, max_area_ratio=0.8,
+    def __init__(self, camera_matrix, dist_coeffs, target_markers,
+                 square_size_mm=20.0,
+                 score_threshold=0.6,
+                 use_clahe=True,
+                 max_detections=None,
+                 min_area=100,
+                 max_area_ratio=0.8,
                  denoise_strength=7):
         """
         :param target_markers: List of 32x32 gray bitmaps (numpy arrays).
         :param square_size_mm: Real life square side length (default 25mm).
         :param score_threshold: Minimum score for marker matching (default 0.8).
-        :param downscale_factor: Scale factor for processing (0.5 = half size, faster but less accurate)
         :param use_clahe: Use CLAHE enhancement (slower but better in varied lighting)
         :param max_detections: Stop processing after finding N markers (None = find all)
         :param min_area: Minimum contour area in pixels (default 100)
@@ -331,7 +335,6 @@ class CozmoCubeDetector:
         self.target_markers = target_markers
         self.square_size = square_size_mm
         self.score_threshold = score_threshold
-        self.downscale_factor = downscale_factor
         self.use_clahe = use_clahe
         self.max_detections = max_detections
         self.min_area = min_area
@@ -359,50 +362,51 @@ class CozmoCubeDetector:
         self.dst_pts = np.array([[0, 0], [31, 0], [31, 31], [0, 31]], dtype=np.float32)
 
         # Scale camera matrix if downscaling
-        if self.downscale_factor < 1.0:
-            self.scaled_camera_matrix = self.camera_matrix.copy()
-            self.scaled_camera_matrix[0, 0] *= self.downscale_factor
-            self.scaled_camera_matrix[1, 1] *= self.downscale_factor
-            self.scaled_camera_matrix[0, 2] *= self.downscale_factor
-            self.scaled_camera_matrix[1, 2] *= self.downscale_factor
-        else:
-            self.scaled_camera_matrix = self.camera_matrix
+        self.scaled_camera_matrix = self.camera_matrix
 
         # Face type and rotation lookup tables
         self.face_type_lookup = ['wall', 'wall', 'wall', 'wall', 'bottom', 'top']
         self.rotation_lookup = [0, 90, 180, 270, 0, 0]
 
+        # Debug mode
+        self.debug = False
+        self.debug_images = {}
+
+    def set_debug(self, enabled):
+        """Enable or disable debug mode for saving intermediate images."""
+        self.debug = enabled
+
     def detect(self, frame, try_negative=False):
         """Processes a frame to find cubes, including optional negative image pass."""
-        # Downscale for faster processing if enabled
-        if self.downscale_factor < 1.0:
-            small_frame = cv2.resize(frame, None, fx=self.downscale_factor, fy=self.downscale_factor,
-                                     interpolation=cv2.INTER_AREA)
-            gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if self.debug:
+            self.debug_images = {}
+            self.debug_images['processed'] = frame.copy()
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        if self.debug:
+            self.debug_images['grayscale'] = gray.copy()
 
         # Apply noise reduction if enabled
         if self.denoise_strength > 0:
             gray = self._denoise_image(gray)
+            if self.debug:
+                self.debug_images['denoised'] = gray.copy()
 
         # Apply CLAHE if enabled
         enhanced = self.clahe.apply(gray) if self.use_clahe else gray
+        if self.debug:
+            self.debug_images['enhanced'] = enhanced.copy()
 
         # Pass 1: Normal image
         detections = self._run_detection_pass(enhanced)
 
         # Pass 2: Negative image (if no detections found)
         if try_negative and not detections:
-            detections = self._run_detection_pass(cv2.bitwise_not(enhanced))
-
-        # Scale corners back to original size if downscaled
-        if self.downscale_factor < 1.0:
-            scale = 1.0 / self.downscale_factor
-            for det in detections:
-                det['corners'] = (det['corners'] * scale).astype(np.int32)
-                if 'ordered_corners' in det:
-                    det['ordered_corners'] = (det['ordered_corners'] * scale).astype(np.int32)
+            neg_enhanced = cv2.bitwise_not(enhanced)
+            if self.debug:
+                self.debug_images['negative_enhanced'] = neg_enhanced.copy()
+            detections = self._run_detection_pass(neg_enhanced)
 
         return detections
 
@@ -435,6 +439,11 @@ class CozmoCubeDetector:
         # Binary threshold with blur
         blurred = cv2.GaussianBlur(img, (5, 5), 0)
         _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+        if self.debug:
+            is_negative = np.mean(img) < 127
+            key = 'binary_negative' if is_negative else 'binary'
+            self.debug_images[key] = binary.copy()
 
         # Find contours
         contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
@@ -574,3 +583,7 @@ class CozmoCubeDetector:
         rotation = self.rotation_lookup[face_idx]
 
         return cube_id, face_type, rotation
+
+    def get_debug_images(self):
+        """Get the current debug images dictionary."""
+        return self.debug_images.copy()

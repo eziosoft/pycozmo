@@ -43,6 +43,7 @@ class VisionDisplay:
         self.latest_raw_frame = None
         self.latest_annotated_frame = None
         self.latest_detections = []
+        self.latest_debug_images = {}
         self.running = True
         self.show_fps = True
         self.detection_enabled = True
@@ -99,6 +100,10 @@ class VisionDisplay:
         # Update 3D viewer if enabled
         if self.use_3d_viewer and self.show_3d and self.viewer_3d:
             self.update_3d_viewer()
+
+    def on_debug_images(self, cli, debug_images, detections):
+        """Handler for debug images from cube detection pipeline."""
+        self.latest_debug_images = debug_images
 
     def update_3d_viewer(self):
         """Update 3D viewer with current cube states."""
@@ -254,6 +259,10 @@ class VisionDisplay:
         # Display
         cv2.imshow(self.window_name, combined)
 
+        # Display debug images
+        for name, img in self.latest_debug_images.items():
+            cv2.imshow(f"Debug: {name}", img)
+
     def save_frames(self):
         """Save current frames to disk."""
         if self.latest_raw_frame is None:
@@ -373,11 +382,17 @@ def main():
                 display.on_annotated_camera_image
             )
 
+            # Register handler for debug images
+            cli.add_handler(
+                pycozmo.event.EvtCubeDetectorDebugImages,
+                display.on_debug_images
+            )
+
             # Enable camera
             print("🎥 Enabling camera...")
             cli.enable_camera(enable=True, color=False)
             # Set camera params for auto exposure
-            cli.set_camera_params(exposure_ms=100)
+            cli.set_camera_params(exposure_ms=20)
 
             # Wait for camera to stabilize
             time.sleep(2.0)
