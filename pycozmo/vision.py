@@ -1,37 +1,37 @@
 """
 
-Computer vision module for object detection and image processing.
+Computer vision module for cube detection and tracking.
 
-This module handles cube detection and other CV tasks at the Application Layer.
+This module handles cube detection using the cubeDetector.py implementation
+and provides annotated frames for visualization.
 
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 from dataclasses import dataclass
 import time
-import struct
-from threading import Event
 
+import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from . import logger
-from . import protocol_encoder
+from .camera_calibration import CameraCalibration
 
-# Try to import CubeFusionTracker if available
+# Import CubeFusionTracker
 try:
     from .cubeDetector.cubeDetector import CubeFusionTracker, CozmoCubeDetector
     CUBE_DETECTOR_AVAILABLE = True
 except ImportError:
     CUBE_DETECTOR_AVAILABLE = False
-    logger.warning("CubeFusionTracker not available - advanced cube tracking disabled")
+    logger.error("cubeDetector module is required but not available")
+    raise
 
 
 __all__ = [
     "CubeDetection",
     "VisionProcessor",
-    "CameraCalibration",
-    "CameraCalibrationRetriever",
+    "AnnotatedVisionProcessor",
 ]
 
 
@@ -48,234 +48,73 @@ class CubeDetection:
     # Confidence score (0.0 to 1.0)
     confidence: float
 
-    # Estimated distance from robot (if available)
-    distance: Optional[float] = None
+    # Estimated distance from robot (in meters)
+    distance: float
 
-    # Cube ID (if tracking is enabled)
-    cube_id: Optional[int] = None
+    # Cube ID (1-indexed for display)
+    cube_id: int
 
     # Timestamp of detection
     timestamp: float = 0.0
 
 
-@dataclass
-class CameraCalibration:
-    """
-    Camera intrinsic calibration parameters for 3D localization.
-
-    These parameters define the camera's internal geometry and are required
-    for accurate 3D reconstruction from 2D images.
-    """
-
-    fx: float  # Focal length x (pixels)
-    fy: float  # Focal length y (pixels)
-    cx: float  # Principal point x (pixels)
-    cy: float  # Principal point y (pixels)
-    k1: float = 0.0  # Radial distortion
-    k2: float = 0.0
-    k3: float = 0.0
-    p1: float = 0.0  # Tangential distortion
-    p2: float = 0.0
-    image_width: int = 320
-    image_height: int = 240
-    fov_x: Optional[float] = None
-    fov_y: Optional[float] = None
-
-    def __post_init__(self):
-        """Compute FOV if not provided."""
-        if self.fov_x is None:
-            self.fov_x = 2.0 * np.arctan(self.image_width / (2.0 * self.fx))
-        if self.fov_y is None:
-            self.fov_y = 2.0 * np.arctan(self.image_height / (2.0 * self.fy))
-
-    @property
-    def camera_matrix(self) -> np.ndarray:
-        """Get the camera intrinsic matrix K."""
-        return np.array([
-            [self.fx, 0.0, self.cx],
-            [0.0, self.fy, self.cy],
-            [0.0, 0.0, 1.0]
-        ], dtype=np.float64)
-
-    @property
-    def distortion_coefficients(self) -> np.ndarray:
-        """Get distortion coefficients [k1, k2, p1, p2, k3]."""
-        return np.array([self.k1, self.k2, self.p1, self.p2, self.k3], dtype=np.float64)
-
-    @classmethod
-    def default_calibration(cls) -> 'CameraCalibration':
-        """Get default/approximate calibration for Cozmo."""
-        return cls(fx=340.0, fy=340.0, cx=160.0, cy=120.0,
-                   image_width=320, image_height=240)
-
-
-class CameraCalibrationRetriever:
-    """Retrieves camera calibration data from Cozmo's NVRAM."""
-
-    def __init__(self, client):
-        self.client = client
-        self._calib_data = []
-        self._event = Event()
-        self._success = False
-
-    def get_calibration(self, timeout: float = 10.0) -> Optional[CameraCalibration]:
-        """Retrieve camera calibration from robot."""
-        logger.info("Requesting camera calibration...")
-        self._calib_data = []
-        self._event.clear()
-        self._success = False
-
-        self.client.add_handler(protocol_encoder.NvStorageOpResult,
-                                 self._on_nv_storage_op_result)
-
-        try:
-            pkt = protocol_encoder.NvStorageOp(
-                tag=protocol_encoder.NvEntryTag.NVEntry_CameraCalib,
-                length=1,
-                op=protocol_encoder.NvOperation.NVOP_READ)
-            self.client.conn.send(pkt)
-
-            if self._event.wait(timeout=timeout):
-                if self._success and self._calib_data:
-                    calib = self._parse_calibration_data(self._calib_data)
-                    if calib:
-                        logger.info(f"Calibration retrieved: {calib}")
-                        return calib
-            else:
-                logger.error("Timeout waiting for calibration")
-        except Exception as e:
-            logger.error(f"Error retrieving calibration: {e}")
-
-        logger.warning("Using default calibration")
-        return CameraCalibration.default_calibration()
-
-    def _on_nv_storage_op_result(self, cli, pkt):
-        """Handler for NVRAM results."""
-        if pkt.tag == protocol_encoder.NvEntryTag.NVEntry_CameraCalib:
-            if pkt.data:
-                self._calib_data.extend(pkt.data)
-            if pkt.result != protocol_encoder.NvResult.NV_MORE:
-                self._success = (pkt.result == protocol_encoder.NvResult.NV_OKAY)
-                self._event.set()
-
-    def _parse_calibration_data(self, data: list) -> Optional[CameraCalibration]:
-        """Parse raw calibration data."""
-        if not data:
-            return None
-        data_bytes = bytes(data)
-
-        # Try float32 format (9 values = 36 bytes)
-        if len(data_bytes) >= 36:
-            try:
-                vals = struct.unpack('<9f', data_bytes[:36])
-                fx, fy, cx, cy, k1, k2, p1, p2, k3 = vals
-                if 100 < fx < 1000 and 100 < fy < 1000:
-                    return CameraCalibration(fx=fx, fy=fy, cx=cx, cy=cy,
-                                            k1=k1, k2=k2, k3=k3, p1=p1, p2=p2)
-            except:
-                pass
-
-        # Try float64 format (9 values = 72 bytes)
-        if len(data_bytes) >= 72:
-            try:
-                vals = struct.unpack('<9d', data_bytes[:72])
-                fx, fy, cx, cy, k1, k2, p1, p2, k3 = vals
-                if 100 < fx < 1000 and 100 < fy < 1000:
-                    return CameraCalibration(fx=fx, fy=fy, cx=cx, cy=cy,
-                                            k1=k1, k2=k2, k3=k3, p1=p1, p2=p2)
-            except:
-                pass
-
-        logger.warning(f"Could not parse {len(data_bytes)} bytes of calibration data")
-        return None
-
-
 class VisionProcessor:
     """
-    Computer vision processor for detecting cubes and other objects.
+    Computer vision processor for detecting and tracking Cozmo cubes.
 
-    This class should be used at the Application Layer (Brain) to process
-    camera images asynchronously.
+    Uses CozmoCubeDetector from cubeDetector.py for marker-based 3D tracking.
     """
 
-    def __init__(self, enable_tracking: bool = True,
-                 camera_calibration: Optional[CameraCalibration] = None,
-                 use_advanced_detector: bool = False):
+    def __init__(self, camera_calibration: CameraCalibration):
         """
         Initialize the vision processor.
 
         Args:
-            enable_tracking: Whether to track detected cubes across frames
-            camera_calibration: Camera calibration for 3D pose estimation
-            use_advanced_detector: Use CozmoCubeDetector with CubeFusionTracker for 3D tracking
+            camera_calibration: Camera calibration from Cozmo (required)
         """
-        self.enable_tracking = enable_tracking
-        self.next_cube_id = 1
-        self.tracked_cubes = {}  # Dict[int, CubeDetection]
-        self.camera_calibration = camera_calibration or CameraCalibration.default_calibration()
-
-        # Advanced 3D detector setup
-        self.use_advanced_detector = use_advanced_detector and CUBE_DETECTOR_AVAILABLE
+        self.camera_calibration = camera_calibration
         self.cube_detector = None
         self.cube_tracker = None
         self.fused_cubes = {}  # 3D fused cube states
 
-        if self.use_advanced_detector:
-            if not CUBE_DETECTOR_AVAILABLE:
-                logger.warning("Advanced detector requested but CubeFusionTracker not available")
-                self.use_advanced_detector = False
-            else:
-                self._init_advanced_detector()
+        # Initialize the detector
+        self._init_detector()
 
-        # Detection parameters (can be tuned)
-        self.min_cube_size = 20  # Minimum cube size in pixels
-        self.max_cube_size = 200  # Maximum cube size in pixels
-        self.confidence_threshold = 0.5
+        logger.info("Vision processor initialized with cubeDetector.py")
 
-        logger.info("Vision processor initialized")
-
-    def _init_advanced_detector(self):
-        """Initialize the advanced CozmoCubeDetector with marker templates."""
+    def _init_detector(self):
+        """Initialize the CozmoCubeDetector with marker templates."""
         import cv2
         import glob
         import os
 
         # Load marker templates
         target_markers = []
-        # Try to find marker templates in cubeDetector directory
         marker_dir = os.path.join(os.path.dirname(__file__), 'cubeDetector', 'cube_faces')
+
         if not os.path.exists(marker_dir):
-            logger.warning(f"Marker directory not found: {marker_dir}")
-            self.use_advanced_detector = False
-            return
+            raise FileNotFoundError(f"Marker directory not found: {marker_dir}")
 
         template_files = sorted(glob.glob(os.path.join(marker_dir, '*.jpg')))
         if not template_files:
-            logger.warning(f"No marker templates found in {marker_dir}")
-            self.use_advanced_detector = False
-            return
+            raise FileNotFoundError(f"No marker templates found in {marker_dir}")
 
-        logger.info(f"Loading {len(template_files)} marker templates:")
+        logger.info(f"Loading {len(template_files)} marker templates")
         for idx, img_path in enumerate(template_files):
-            filename = os.path.basename(img_path)
-            logger.info(f"  Marker {idx:2d}: {filename}")
             img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
             if img is None:
+                logger.warning(f"Failed to load {os.path.basename(img_path)}")
                 continue
-            # Cut offset from each side
+            # Process template: crop, resize, add border
             h, w = img.shape
             offset = 18
             img = img[offset:h - offset, offset:w - offset]
-            # Resize to 26x26
             img = cv2.resize(img, (26, 26), interpolation=cv2.INTER_AREA)
-            # Add 3px white border to make 32x32
             img_with_border = cv2.copyMakeBorder(img, 3, 3, 3, 3, cv2.BORDER_CONSTANT, value=255)
             target_markers.append(img_with_border)
 
         if not target_markers:
-            logger.warning("No valid marker templates loaded")
-            self.use_advanced_detector = False
-            return
+            raise RuntimeError("No valid marker templates could be loaded")
 
         # Create detector
         self.cube_detector = CozmoCubeDetector(
@@ -294,21 +133,16 @@ class VisionProcessor:
             max_age_frames=10
         )
 
-        logger.info("Advanced cube detector initialized")
+        logger.info("Cube detector initialized successfully")
 
     def get_fused_cube_states(self):
         """
         Get the fused 3D cube states from the fusion tracker.
 
         Returns:
-            Dict of {cube_id: cube_state} where cube_state contains:
-            - position: 3D position (x, y, z) in mm
-            - rotation_matrix: 3x3 rotation matrix
-            - confidence: detection confidence
-            - num_faces: number of faces detected
-            - rotation_source: which face determined the rotation
+            Dict of {cube_id: cube_state} containing position, rotation_matrix, etc.
         """
-        return self.fused_cubes.copy() if self.use_advanced_detector else {}
+        return self.fused_cubes.copy()
 
     def detect_cubes(self, image: Image.Image) -> List[CubeDetection]:
         """
@@ -318,32 +152,22 @@ class VisionProcessor:
             image: PIL Image from the robot's camera
 
         Returns:
-            List of detected cubes
+            List of detected cubes with 3D tracking
         """
         timestamp = time.time()
-
-        # Convert PIL Image to numpy array for processing
         img_array = np.array(image)
 
-        # Use advanced detector if available
-        if self.use_advanced_detector and self.cube_detector is not None:
-            detections = self._detect_cubes_advanced(img_array)
-        else:
-            detections = self._detect_cubes_impl(img_array)
+        detections = self._detect_cubes(img_array)
 
         # Add timestamps
         for det in detections:
             det.timestamp = timestamp
 
-        # Update tracking if enabled (only for basic detection)
-        if self.enable_tracking and not self.use_advanced_detector:
-            detections = self._update_tracking(detections)
-
         return detections
 
-    def _detect_cubes_advanced(self, img_array: np.ndarray) -> List[CubeDetection]:
+    def _detect_cubes(self, img_array: np.ndarray) -> List[CubeDetection]:
         """
-        Use advanced CozmoCubeDetector with 3D tracking.
+        Detect cubes using CozmoCubeDetector with 3D tracking.
 
         Args:
             img_array: Image as numpy array (RGB from PIL)
@@ -351,155 +175,95 @@ class VisionProcessor:
         Returns:
             List of detected cubes with 3D information
         """
-        import cv2
+        try:
+            import cv2
 
-        # Convert RGB to BGR for OpenCV
-        img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+            # Convert RGB to BGR for OpenCV
+            img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
 
-        # Detect marker faces
-        results = self.cube_detector.detect(img_bgr)
+            # Auto-brightness adjustment for dark images
+            img_bgr = self._auto_brightness_contrast(img_bgr)
 
-        # Fuse detections into coherent cube poses
-        self.fused_cubes = self.cube_tracker.update(results)
+            # Detect marker faces
+            results = self.cube_detector.detect(img_bgr)
 
-        # Convert to CubeDetection format
-        detections = []
-        for cube_id, cube_state in self.fused_cubes.items():
-            # Calculate approximate bounding box from 3D position
-            # This is a simplified projection - could be improved
-            pos = cube_state['position']
-            distance = np.linalg.norm(pos)  # Distance in mm
+            # Fuse detections into coherent cube poses
+            self.fused_cubes = self.cube_tracker.update(results)
 
-            # Find detections for this cube to get bounding box
-            cube_results = [r for r in results if r['cube_id'] == cube_id]
-            if cube_results:
-                # Use the bounding box from detections
-                all_corners = np.vstack([r['corners'] for r in cube_results])
-                x_min = int(np.min(all_corners[:, 0]))
-                y_min = int(np.min(all_corners[:, 1]))
-                x_max = int(np.max(all_corners[:, 0]))
-                y_max = int(np.max(all_corners[:, 1]))
+            # Convert to CubeDetection format
+            detections = []
+            for cube_id, cube_state in self.fused_cubes.items():
+                pos = cube_state['position']
+                distance = np.linalg.norm(pos) / 1000.0  # Convert mm to meters
 
-                width = x_max - x_min
-                height = y_max - y_min
+                # Get bounding box from detections
+                cube_results = [r for r in results if r['cube_id'] == cube_id]
+                if cube_results:
+                    corner_list = []
+                    for r in cube_results:
+                        corners = r['corners']
+                        if corners.ndim == 3:  # Handle OpenCV contour format (n, 1, 2)
+                            corners = corners.reshape(-1, 2)
+                        corner_list.append(corners)
 
-                det = CubeDetection(
-                    x=x_min,
-                    y=y_min,
-                    width=width,
-                    height=height,
-                    confidence=cube_state['confidence'],
-                    distance=distance / 1000.0,  # Convert mm to meters
-                    cube_id=cube_id + 1  # 1-indexed for user display
-                )
-                detections.append(det)
+                    if corner_list:
+                        all_corners = np.vstack(corner_list)
+                        x_min = int(np.min(all_corners[:, 0]))
+                        y_min = int(np.min(all_corners[:, 1]))
+                        x_max = int(np.max(all_corners[:, 0]))
+                        y_max = int(np.max(all_corners[:, 1]))
 
-        return detections
+                        det = CubeDetection(
+                            x=x_min,
+                            y=y_min,
+                            width=max(1, x_max - x_min),
+                            height=max(1, y_max - y_min),
+                            confidence=cube_state['confidence'],
+                            distance=distance,
+                            cube_id=cube_id + 1  # 1-indexed for display
+                        )
+                        detections.append(det)
 
-    def _detect_cubes_impl(self, img_array: np.ndarray) -> List[CubeDetection]:
+            return detections
+        except Exception as e:
+            logger.error(f"Error in cube detection: {e}", exc_info=True)
+            return []
+
+    def _auto_brightness_contrast(self, image: np.ndarray) -> np.ndarray:
         """
-        Internal implementation of cube detection.
+        Automatically adjust brightness and contrast for dark images using CLAHE.
 
-        This is a placeholder that should be replaced with actual detection logic.
+        CLAHE (Contrast Limited Adaptive Histogram Equalization) improves local contrast
+        and enhances details in both bright and dark areas of the image. This is particularly
+        useful for cube detection in varying lighting conditions.
 
         Args:
-            img_array: Image as numpy array
+            image: Input BGR image
 
         Returns:
-            List of detected cubes (without IDs or tracking)
+            Brightness/contrast adjusted image
         """
-        # Placeholder implementation
-        # In a real implementation, you would:
-        # 1. Pre-process the image (resize, normalize, etc.)
-        # 2. Apply detection algorithm
-        # 3. Post-process results (NMS, filtering, etc.)
+        # Convert to LAB color space for better brightness adjustment
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
 
-        detections = []
+        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to L channel
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        l_clahe = clahe.apply(l)
 
-        # Example: Simple color-based detection for demonstration
-        # Cozmo cubes typically have red, green, and blue markers
-        detections.extend(self._detect_by_color(img_array, "red"))
-        detections.extend(self._detect_by_color(img_array, "green"))
-        detections.extend(self._detect_by_color(img_array, "blue"))
+        # Merge channels back
+        lab_clahe = cv2.merge((l_clahe, a, b))
 
-        return detections
+        # Convert back to BGR
+        result = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
 
-    def _detect_by_color(self, img_array: np.ndarray, color: str) -> List[CubeDetection]:
-        """
-        Detect cube-like regions by color.
-
-        This is a simplified example. Real implementation would need more
-        sophisticated algorithms.
-
-        Args:
-            img_array: Image as numpy array
-            color: Color to detect ("red", "green", "blue")
-
-        Returns:
-            List of potential cube detections
-        """
-        # Placeholder - would implement color thresholding and contour detection
-        # For example, using OpenCV:
-        # - Convert to HSV color space
-        # - Apply color threshold
-        # - Find contours
-        # - Filter by size and shape
-        # - Return bounding boxes
-
-        return []
-
-    def _update_tracking(self, detections: List[CubeDetection]) -> List[CubeDetection]:
-        """
-        Update cube tracking across frames.
-
-        Args:
-            detections: List of current frame detections
-
-        Returns:
-            List of detections with cube IDs assigned
-        """
-        # Simple tracking based on position proximity
-        # More sophisticated tracking could use Kalman filters, Hungarian algorithm, etc.
-
-        tracked = []
-
-        for det in detections:
-            # Try to match with existing tracked cubes
-            matched_id = None
-            min_distance = float('inf')
-
-            for cube_id, prev_det in self.tracked_cubes.items():
-                # Calculate distance between current and previous detection
-                dist = np.sqrt((det.x - prev_det.x)**2 + (det.y - prev_det.y)**2)
-
-                # If close enough, consider it the same cube
-                if dist < 50 and dist < min_distance:  # 50 pixels threshold
-                    matched_id = cube_id
-                    min_distance = dist
-
-            if matched_id is not None:
-                det.cube_id = matched_id
-            else:
-                # New cube detected
-                det.cube_id = self.next_cube_id
-                self.next_cube_id += 1
-
-            self.tracked_cubes[det.cube_id] = det
-            tracked.append(det)
-
-        # Remove old tracked cubes that weren't detected
-        current_ids = {det.cube_id for det in tracked}
-        self.tracked_cubes = {k: v for k, v in self.tracked_cubes.items() if k in current_ids}
-
-        return tracked
+        return result
 
     def reset_tracking(self):
         """Reset the cube tracking state."""
-        self.tracked_cubes.clear()
-        self.next_cube_id = 1
         if self.cube_tracker:
             self.cube_tracker.cubes.clear()
-        logger.info("Cube tracking reset")
+            logger.info("Cube tracking reset")
 
     # Annotation settings
     annotation_colors = [
@@ -627,18 +391,18 @@ class AnnotatedVisionProcessor(VisionProcessor):
         cli.add_handler(pycozmo.event.EvtAnnotatedCameraImage, on_annotated_image)
     """
 
-    def __init__(self, client, enable_tracking: bool = True,
+    def __init__(self, client, camera_calibration: CameraCalibration,
                  process_every_n_frames: int = 1):
         """
         Initialize the annotated vision processor.
 
         Args:
             client: PyCozmo Client instance to attach handlers to
-            enable_tracking: Whether to track detected cubes across frames
+            camera_calibration: Camera calibration from Cozmo (required)
             process_every_n_frames: Process every Nth frame (1 = all frames,
                                    2 = every other frame, etc.)
         """
-        super().__init__(enable_tracking=enable_tracking)
+        super().__init__(camera_calibration=camera_calibration)
 
         self.client = client
         self.process_every_n_frames = process_every_n_frames
@@ -665,17 +429,26 @@ class AnnotatedVisionProcessor(VisionProcessor):
         if self._frame_counter % self.process_every_n_frames != 0:
             return
 
-        # Import here to avoid circular dependency
-        from . import event
+        try:
+            # Import here to avoid circular dependency
+            from . import event
 
-        # Detect cubes and annotate
-        detections, annotated_image = self.detect_and_annotate(image)
+            # Detect cubes and annotate
+            detections, annotated_image = self.detect_and_annotate(image)
 
-        # Dispatch annotated image event
-        self.client.dispatch(event.EvtAnnotatedCameraImage, cli, annotated_image, detections)
+            # Dispatch annotated image event
+            self.client.dispatch(event.EvtAnnotatedCameraImage, cli, annotated_image, detections)
 
-        # Also handle cube detection events
-        self._dispatch_cube_events(cli, detections)
+            # Also handle cube detection events
+            self._dispatch_cube_events(cli, detections)
+
+            # Periodic cleanup every 30 frames to prevent memory buildup
+            if self._frame_counter % 30 == 0:
+                import gc
+                gc.collect()
+
+        except Exception as e:
+            logger.error(f"Error processing camera image: {e}", exc_info=True)
 
     def _dispatch_cube_events(self, cli, detections: List[CubeDetection]):
         """
@@ -694,23 +467,30 @@ class AnnotatedVisionProcessor(VisionProcessor):
 
         current_ids = {det.cube_id for det in detections if det.cube_id is not None}
 
-        # Detect new cubes
-        new_ids = current_ids - self._last_cube_ids
-        if new_ids:
-            new_detections = [d for d in detections if d.cube_id in new_ids]
-            cli.dispatch(event.EvtCubeDetected, cli, new_detections)
+        # Only dispatch events if something changed
+        if current_ids != self._last_cube_ids:
+            # Detect new cubes
+            new_ids = current_ids - self._last_cube_ids
+            if new_ids:
+                new_detections = [d for d in detections if d.cube_id in new_ids]
+                cli.dispatch(event.EvtCubeDetected, cli, new_detections)
 
-        # Dispatch observation event if any cubes visible
-        if detections:
-            cli.dispatch(event.EvtCubeObserved, cli, detections)
+            # Detect lost cubes
+            lost_ids = self._last_cube_ids - current_ids
+            for cube_id in lost_ids:
+                cli.dispatch(event.EvtCubeLost, cli, cube_id)
 
-        # Detect lost cubes
-        lost_ids = self._last_cube_ids - current_ids
-        for cube_id in lost_ids:
-            cli.dispatch(event.EvtCubeLost, cli, cube_id)
+            # Update state
+            self._last_cube_ids = current_ids
 
-        # Update state
-        self._last_cube_ids = current_ids
+        # Only dispatch observation if there are cubes (reduce event spam)
+        if detections and len(detections) > 0:
+            # Throttle observation events - only dispatch every 5th frame
+            if not hasattr(self, '_obs_frame_counter'):
+                self._obs_frame_counter = 0
+            self._obs_frame_counter += 1
+            if self._obs_frame_counter % 5 == 0:
+                cli.dispatch(event.EvtCubeObserved, cli, detections)
 
     def stop(self):
         """

@@ -453,6 +453,11 @@ class Client(event.Dispatcher):
         pkt = protocol_encoder.EnableColorImages(enable=color)
         self.conn.send(pkt)
 
+    def set_camera_params(self, gain: float = 0.0, exposure_ms: int = 0, auto_exposure_enabled: bool = False) -> None:
+        """ Set camera parameters: gain, exposure time, and auto exposure. """
+        pkt = protocol_encoder.SetCameraParams(gain=gain, exposure_ms=exposure_ms, auto_exposure_enabled=auto_exposure_enabled)
+        self.conn.send(pkt)
+
     def clear_screen(self) -> None:
         pkt = protocol_encoder.DisplayImage(image=b"\x3f\x3f")
         self.anim_controller.display_image(pkt)

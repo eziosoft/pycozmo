@@ -16,6 +16,7 @@ class CubeFusionTracker:
     Tracks multiple cubes and fuses multiple face detections into a single coherent cube pose.
     Handles the fact that detecting different faces of the same cube should update the same physical object.
     """
+
     def __init__(self, cube_size_mm=44.0, smoothing_alpha=0.3, max_age_frames=10):
         """
         :param cube_size_mm: Physical size of the cube (44mm for Cozmo cubes)
@@ -62,8 +63,8 @@ class CubeFusionTracker:
 
                 # Smooth position (linear interpolation is fine for positions)
                 fused_state['position'] = (
-                    self.smoothing_alpha * fused_state['position'] +
-                    self.smoothing_complement * prev_state['position']
+                        self.smoothing_alpha * fused_state['position'] +
+                        self.smoothing_complement * prev_state['position']
                 )
 
                 # Smooth rotation using quaternion SLERP (proper SO(3) interpolation)
@@ -215,8 +216,8 @@ class CubeFusionTracker:
             cos_a = np.cos(angle_rad)
             sin_a = np.sin(angle_rad)
             R_cube_to_face = np.array([
-                [cos_a,  0, sin_a],
-                [0,      1, 0    ],
+                [cos_a, 0, sin_a],
+                [0, 1, 0],
                 [-sin_a, 0, cos_a]
             ], dtype=np.float32)
 
@@ -224,9 +225,9 @@ class CubeFusionTracker:
 
             # Wall faces need 180° flip around X-axis to correct orientation
             R_flip = np.array([
-                [1,  0,  0],
-                [0, -1,  0],
-                [0,  0, -1]
+                [1, 0, 0],
+                [0, -1, 0],
+                [0, 0, -1]
             ], dtype=np.float32)
             cube_rotation = cube_rotation @ R_flip
 
@@ -235,8 +236,8 @@ class CubeFusionTracker:
             # The top marker is rotated 180° relative to cube frame
             # Transform: pitch -90° around X (Y->Z, Z->-Y)
             R_cube_to_face = np.array([
-                [1,  0, 0],
-                [0,  0, 1],
+                [1, 0, 0],
+                [0, 0, 1],
                 [0, -1, 0]
             ], dtype=np.float32)
 
@@ -244,9 +245,9 @@ class CubeFusionTracker:
 
             # Top marker is mounted upside-down: rotate 180° around Z-axis
             R_flip_marker = np.array([
-                [-1,  0, 0],
-                [ 0, -1, 0],
-                [ 0,  0, 1]
+                [-1, 0, 0],
+                [0, -1, 0],
+                [0, 0, 1]
             ], dtype=np.float32)
             cube_rotation = cube_rotation @ R_flip_marker
 
@@ -254,18 +255,18 @@ class CubeFusionTracker:
             # Bottom face: cube's -Y (bottom) points toward camera
             # Transform: pitch +90° around X (Y->-Z, Z->Y)
             R_cube_to_face = np.array([
-                [1, 0,  0],
+                [1, 0, 0],
                 [0, 0, -1],
-                [0, 1,  0]
+                [0, 1, 0]
             ], dtype=np.float32)
 
             cube_rotation = face_rotation @ R_cube_to_face.T
 
             # Bottom marker orientation correction
             R_flip_marker = np.array([
-                [-1,  0, 0],
-                [ 0, -1, 0],
-                [ 0,  0, 1]
+                [-1, 0, 0],
+                [0, -1, 0],
+                [0, 0, 1]
             ], dtype=np.float32)
             cube_rotation = cube_rotation @ R_flip_marker
 
@@ -277,8 +278,8 @@ class CubeFusionTracker:
 
 
 class CozmoCubeDetector:
-    def __init__(self, camera_matrix, dist_coeffs, target_markers, square_size_mm=20.0, score_threshold=0.8,
-                 downscale_factor=1.0, use_clahe=False, max_detections=None):
+    def __init__(self, camera_matrix, dist_coeffs, target_markers, square_size_mm=20.0, score_threshold=0.6,
+                 downscale_factor=1.0, use_clahe=True, max_detections=None, min_area=100, max_area_ratio=0.8):
         """
         :param target_markers: List of 32x32 gray bitmaps (numpy arrays).
         :param square_size_mm: Real life square side length (default 25mm).
@@ -286,6 +287,8 @@ class CozmoCubeDetector:
         :param downscale_factor: Scale factor for processing (0.5 = half size, faster but less accurate)
         :param use_clahe: Use CLAHE enhancement (slower but better in varied lighting)
         :param max_detections: Stop processing after finding N markers (None = find all)
+        :param min_area: Minimum contour area in pixels (default 100)
+        :param max_area_ratio: Maximum contour area as fraction of image area (default 0.4)
         """
         self.camera_matrix = camera_matrix
         self.dist_coeffs = dist_coeffs
@@ -295,13 +298,15 @@ class CozmoCubeDetector:
         self.downscale_factor = downscale_factor
         self.use_clahe = use_clahe
         self.max_detections = max_detections
+        self.min_area = min_area
+        self.max_area_ratio = max_area_ratio
         self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)) if use_clahe else None
 
         # Define 3D object points for Pose Estimation (SolvePnP)
         s = self.square_size / 2.0
         self.obj_points = np.array([
-            [-s,  s, 0], [ s,  s, 0],
-            [ s, -s, 0], [-s, -s, 0]
+            [-s, s, 0], [s, s, 0],
+            [s, -s, 0], [-s, -s, 0]
         ], dtype=np.float32)
 
         # Pre-compute all rotations of target markers and normalize them once
@@ -335,7 +340,7 @@ class CozmoCubeDetector:
         # Downscale for faster processing if enabled
         if self.downscale_factor < 1.0:
             small_frame = cv2.resize(frame, None, fx=self.downscale_factor, fy=self.downscale_factor,
-                                    interpolation=cv2.INTER_AREA)
+                                     interpolation=cv2.INTER_AREA)
             gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
         else:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -371,8 +376,8 @@ class CozmoCubeDetector:
 
         # Filter and sort contours by area
         h, w = img.shape[:2]
-        max_area = w * h * 0.4
-        contours = [c for c in contours if 100 < cv2.contourArea(c) < max_area]
+        max_area = w * h * self.max_area_ratio
+        contours = [c for c in contours if self.min_area < cv2.contourArea(c) < max_area]
         contours.sort(key=cv2.contourArea, reverse=True)
 
         results = []
@@ -504,209 +509,3 @@ class CozmoCubeDetector:
         rotation = self.rotation_lookup[face_idx]
 
         return cube_id, face_type, rotation
-
-
-
-def _draw_corner_numbers(frame, detection):
-    """Overlay corner indices that follow the marker's rotation."""
-    ordered = detection.get('ordered_corners')
-    if ordered is None or len(ordered) != 4:
-        return
-
-    ordered = ordered.astype(np.float32)
-    center = ordered.mean(axis=0)
-
-    # Corners are already in correct order from detection phase
-    # ordered[0] is corner 0, ordered[1] is corner 1, etc.
-    for idx, point in enumerate(ordered):
-        direction = point - center
-        text_point = point + 0.2 * direction
-        circle_pt = (int(point[0]), int(point[1]))
-        text_pt = (int(text_point[0]), int(text_point[1]))
-
-        # Draw corner 0 with a large yellow circle for clear visibility
-        if idx == 0:
-            cv2.circle(frame, circle_pt, 12, (0, 255, 255), -1)  # Large yellow filled circle
-            cv2.circle(frame, circle_pt, 13, (0, 0, 0), 2)  # Black outline
-        else:
-            cv2.circle(frame, circle_pt, 3, (255, 0, 0), -1)  # Small blue circle for other corners
-
-        cv2.putText(frame, str(idx), text_pt,
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 0), 1, cv2.LINE_AA)
-
-
-def _draw_marker_top(frame, detection):
-    """Draw a thick line on the top edge of the marker to show orientation."""
-    ordered = detection.get('ordered_corners')
-    if ordered is None or len(ordered) != 4:
-        return
-
-    # Top edge is between corner 0 and corner 1 (after rotation correction)
-    rotation_steps = int(detection.get('marker_rotation', 0)) % 4
-
-    # Get the actual top edge corners after rotation
-    pt0 = tuple(ordered[0].astype(int))
-    pt1 = tuple(ordered[1].astype(int))
-
-    # Draw thick cyan line on top edge
-    cv2.line(frame, pt0, pt1, (255, 255, 0), 4)  # Cyan color, thick line
-
-
-# --- RUNNER ---
-if __name__ == "__main__":
-    print("Starting CozmoCubeDetector")
-
-    # Load camera calibration
-    try:
-        calib = np.load("../mac_calibration.npz")
-        camera_matrix = calib['camera_matrix']
-        dist_coeffs = calib['distortion_coefficients']
-    except:
-        print("Failed to load camera calibration from ../mac_calibration.npz")
-        exit(1)
-
-    # Load target markers
-    target_markers = []
-    template_files = sorted(glob.glob("cube_faces/*.jpg"))
-    print("\nLoading marker templates:")
-    for idx, img_path in enumerate(template_files):
-        filename = os.path.basename(img_path)
-        print(f"  Marker {idx:2d}: {filename}")
-        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            continue
-        # Cut 10px from each side
-        h, w = img.shape
-        offset = 18
-        img = img[offset:h - offset, offset:w - offset]
-        # Resize to 26x26
-        img = cv2.resize(img, (26, 26), interpolation=cv2.INTER_AREA)
-        # Add 3px white border to make 32x32
-        img_with_border = cv2.copyMakeBorder(img, 3, 3, 3, 3, cv2.BORDER_CONSTANT, value=255)
-        target_markers.append(img_with_border)
-    print()
-
-    # Create detector with aggressive optimizations for M1 Mac
-    # - downscale_factor=0.8: Process at 80% resolution (1.5x speedup)
-    # - use_clahe=False: Skip expensive preprocessing (1.3x speedup)
-    # - max_detections=3: Stop after finding 3 cubes (2x speedup when cubes visible)
-    detector = CozmoCubeDetector(
-        camera_matrix, dist_coeffs, target_markers,
-        downscale_factor=1,      # 20% smaller = faster
-        use_clahe=True,            # Skip CLAHE for speed
-        max_detections=3            # Cozmo only has 3 cubes
-    )
-
-    # Create cube fusion tracker to merge multiple face detections per cube
-    cube_tracker = CubeFusionTracker(
-        cube_size_mm=44.0,
-        smoothing_alpha=0.3,  # Smooth position changes
-        max_age_frames=10      # Remove cubes not seen for 10 frames
-    )
-
-    # Open camera
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("Cannot open camera")
-        exit(1)
-
-    # Initialize 3D viewer
-    viewer = World3DViewer(window_size=(800, 600))
-    print("\n3D Viewer Controls:")
-    print("  W/S/A/D - Move camera")
-    print("  Q/E - Move camera up/down")
-    print("  Arrow keys - Rotate camera")
-    print("  Close 3D window to exit\n")
-
-    frame_skip = 1  # Process every 2nd frame (2x speedup)
-    frame_count = 0
-    last_results = []
-
-    import time
-    start_time = time.time()
-    fps_counter = 0
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("Failed to grab frame")
-            break
-
-        frame_count += 1
-        fps_counter += 1
-
-        # Skip frames for speed (use cached results)
-        if frame_count % frame_skip == 0:
-            results = detector.detect(frame)  # Real-time detection
-            last_results = results
-        else:
-            results = last_results
-
-        # Fuse multiple face detections into coherent cube poses
-        fused_cubes = cube_tracker.update(results)
-
-        # Update 3D viewer with fused cube states
-        viewer.clear_cubes()  # Clear previous cubes
-        for cube_id, cube_state in fused_cubes.items():
-            cube_name = f"cube_{cube_id+1}"
-            viewer.update_cube(cube_name, cube_state['position'], cube_state['rotation_matrix'], cube_size=44)
-
-        # Calculate and display FPS
-        if fps_counter >= 30:
-            elapsed = time.time() - start_time
-            fps = fps_counter / elapsed
-
-            # Show detailed cube info
-            cube_info = []
-            for cube_id, cube_state in fused_cubes.items():
-                faces = cube_state['num_faces']
-                rot_src = cube_state.get('rotation_source', 'unknown')
-                cube_info.append(f"C{cube_id+1}:{faces}f({rot_src})")
-
-            info_str = " | ".join(cube_info) if cube_info else "No cubes"
-            print(f"FPS: {fps:.1f} | Faces: {len(results)} | {info_str}")
-            fps_counter = 0
-            start_time = time.time()
-
-        # Draw detections on frame
-        for res in results:
-            marker_id = res['id']
-            score = res['score']
-            dist = np.linalg.norm(res['tvec'])
-
-            # Use pre-computed cube data from detector
-            cube_id = res['cube_id']
-            face_type = res['face_type']
-            rotation = res['rotation']
-
-            # Draw contour
-            cv2.drawContours(frame, [res['corners']], -1, (0, 255, 0), 2)
-
-            # Draw label with cube info and marker ID for debugging
-            label = f"Cube{cube_id+1} {face_type} {rotation}deg (M{marker_id}) {score:.2f}"
-            x, y = res['corners'][0][0]
-            cv2.putText(frame, label, (int(x), int(y) - 10),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-            # Draw coordinate axes if pose is available
-            cv2.drawFrameAxes(frame, detector.camera_matrix, detector.dist_coeffs,
-                            res['rvec'], res['tvec'], 0.02)
-
-            # Draw marker top edge to show orientation
-            _draw_marker_top(frame, res)
-
-            # Draw corner numbers for debugging
-            _draw_corner_numbers(frame, res)
-
-        cv2.imshow('Cozmo Cube Detector', frame)
-
-        # Render 3D viewer
-        if not viewer.render():
-            break  # Exit if 3D viewer window is closed
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-    viewer.close()

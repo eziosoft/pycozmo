@@ -804,8 +804,9 @@ class World3DViewer:
         self._draw_axes()
         self._draw_camera()
 
-        # Draw all cubes
-        for cube_id, cube_data in self.cubes.items():
+        # Draw all cubes (create snapshot to avoid iteration errors)
+        cubes_snapshot = dict(self.cubes)
+        for cube_id, cube_data in cubes_snapshot.items():
             self._draw_cube(
                 cube_id,
                 cube_data['position'],

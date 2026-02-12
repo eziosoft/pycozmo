@@ -23,11 +23,13 @@ import os
 
 import pycozmo
 from pycozmo import vision
+from pycozmo.camera_calibration import CameraCalibrationRetriever
 
 # Import 3D viewer
 try:
     sys.path.append(os.path.join(os.path.dirname(__file__), 'pycozmo', 'cubeDetector'))
     from world_3d_viewer import World3DViewer
+
     VIEWER_3D_AVAILABLE = True
 except ImportError:
     VIEWER_3D_AVAILABLE = False
@@ -106,21 +108,33 @@ class VisionDisplay:
         # Get fused cube states from vision processor
         fused_cubes = self.vision_processor.get_fused_cube_states()
 
-        if not fused_cubes:
-            return
+        # Track which cubes are present
+        if not hasattr(self, '_prev_cube_ids'):
+            self._prev_cube_ids = set()
 
-        # Clear previous cubes
-        self.viewer_3d.clear_cubes()
+        current_cube_ids = set(fused_cubes.keys())
 
-        # Update with new cube poses
-        for cube_id, cube_state in fused_cubes.items():
-            cube_name = f"cube_{cube_id + 1}"
-            self.viewer_3d.update_cube(
-                cube_name,
-                cube_state['position'],
-                cube_state['rotation_matrix'],
-                cube_size=44
-            )
+        # Only clear if the set of cubes changed (expensive operation)
+        if current_cube_ids != self._prev_cube_ids:
+            try:
+                self.viewer_3d.clear_cubes()
+                self._prev_cube_ids = current_cube_ids
+            except Exception as e:
+                print(f"⚠️  Error clearing 3D viewer: {e}")
+                return
+
+        # Update cube poses (cheap operation)
+        try:
+            for cube_id, cube_state in fused_cubes.items():
+                cube_name = f"cube_{cube_id + 1}"
+                self.viewer_3d.update_cube(
+                    cube_name,
+                    cube_state['position'],
+                    cube_state['rotation_matrix'],
+                    cube_size=44
+                )
+        except Exception as e:
+            print(f"⚠️  Error updating 3D viewer: {e}")
 
     def pil_to_cv2(self, pil_image):
         """Convert PIL Image to OpenCV format."""
@@ -315,22 +329,19 @@ def main():
             # Position robot for better viewing
             print("📷 Positioning robot...")
             angle = (pycozmo.robot.MAX_HEAD_ANGLE.radians -
-                    pycozmo.robot.MIN_HEAD_ANGLE.radians) / 80.0
+                     pycozmo.robot.MIN_HEAD_ANGLE.radians) / 80.0
 
             cli.set_head_angle(angle)
             time.sleep(1.0)
 
             # Retrieve camera calibration from Cozmo
             print("📐 Retrieving camera calibration from Cozmo...")
-            calibration_retriever = vision.CameraCalibrationRetriever(cli)
+            calibration_retriever = CameraCalibrationRetriever(cli)
             camera_calibration = calibration_retriever.get_calibration(timeout=10.0)
 
-            if camera_calibration:
-                print(f"✅ Camera calibration retrieved:")
-                print(f"   fx={camera_calibration.fx:.2f}, fy={camera_calibration.fy:.2f}")
-                print(f"   cx={camera_calibration.cx:.2f}, cy={camera_calibration.cy:.2f}")
-            else:
-                print("⚠️  Using default calibration")
+            print(f"✅ Camera calibration retrieved:")
+            print(f"   fx={camera_calibration.fx:.2f}, fy={camera_calibration.fy:.2f}")
+            print(f"   cx={camera_calibration.cx:.2f}, cy={camera_calibration.cy:.2f}")
 
             # Register handler for raw frames
             cli.add_handler(
@@ -338,26 +349,15 @@ def main():
                 display.on_raw_camera_image
             )
 
-            # Create vision processor with advanced detector
-            print("🎨 Initializing vision processor with advanced detector...")
-            use_advanced = VIEWER_3D_AVAILABLE  # Use advanced detector if 3D viewer is available
+            # Create vision processor with cubeDetector.py
+            print("🎨 Initializing vision processor with cubeDetector.py...")
             vision_processor = vision.AnnotatedVisionProcessor(
                 client=cli,
-                enable_tracking=True,
-                process_every_n_frames=1  # Process all frames
+                camera_calibration=camera_calibration,
+                process_every_n_frames=1  # Process every frame (fast computer)
             )
 
-            # Set up advanced detection if available
-            if use_advanced:
-                # Update the underlying VisionProcessor to use advanced detection
-                vision_processor.use_advanced_detector = True
-                vision_processor.camera_calibration = camera_calibration
-                try:
-                    vision_processor._init_advanced_detector()
-                    print("✅ Advanced cube detector initialized")
-                except Exception as e:
-                    print(f"⚠️  Failed to initialize advanced detector: {e}")
-                    vision_processor.use_advanced_detector = False
+            print("✅ Cube detector initialized with camera calibration")
 
             # Store reference for 3D viewer updates
             display.vision_processor = vision_processor
@@ -375,7 +375,9 @@ def main():
 
             # Enable camera
             print("🎥 Enabling camera...")
-            cli.enable_camera(enable=True, color=True)
+            cli.enable_camera(enable=True, color=False)
+            # Set camera params for auto exposure
+            cli.set_camera_params(exposure_ms=100)
 
             # Wait for camera to stabilize
             time.sleep(2.0)
