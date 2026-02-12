@@ -144,12 +144,13 @@ class VisionProcessor:
         """
         return self.fused_cubes.copy()
 
-    def detect_cubes(self, image: Image.Image) -> List[CubeDetection]:
+    def detect_cubes(self, image: Image.Image, head_angle_rad: float = 0.0) -> List[CubeDetection]:
         """
         Detect cubes in the given camera image.
 
         Args:
             image: PIL Image from the robot's camera
+            head_angle_rad: Current head tilt angle in radians (positive = looking up)
 
         Returns:
             List of detected cubes with 3D tracking
@@ -157,7 +158,7 @@ class VisionProcessor:
         timestamp = time.time()
         img_array = np.array(image)
 
-        detections = self._detect_cubes(img_array)
+        detections = self._detect_cubes(img_array, head_angle_rad)
 
         # Add timestamps
         for det in detections:
@@ -165,12 +166,13 @@ class VisionProcessor:
 
         return detections
 
-    def _detect_cubes(self, img_array: np.ndarray) -> List[CubeDetection]:
+    def _detect_cubes(self, img_array: np.ndarray, head_angle_rad: float = 0.0) -> List[CubeDetection]:
         """
         Detect cubes using CozmoCubeDetector with 3D tracking.
 
         Args:
             img_array: Image as numpy array (RGB from PIL)
+            head_angle_rad: Current head tilt angle in radians (positive = looking up)
 
         Returns:
             List of detected cubes with 3D information
@@ -187,8 +189,8 @@ class VisionProcessor:
             # Detect marker faces
             results = self.cube_detector.detect(img_bgr)
 
-            # Fuse detections into coherent cube poses
-            self.fused_cubes = self.cube_tracker.update(results)
+            # Fuse detections into coherent cube poses with head tilt compensation
+            self.fused_cubes = self.cube_tracker.update(results, head_angle_rad)
 
             # Convert to CubeDetection format
             detections = []
@@ -356,7 +358,7 @@ class VisionProcessor:
 
         return annotated_image
 
-    def detect_and_annotate(self, image: Image.Image) -> Tuple[List[CubeDetection], Image.Image]:
+    def detect_and_annotate(self, image: Image.Image, head_angle_rad: float = 0.0) -> Tuple[List[CubeDetection], Image.Image]:
         """
         Detect cubes and return both detections and an annotated image.
 
@@ -364,11 +366,12 @@ class VisionProcessor:
 
         Args:
             image: PIL Image from the robot's camera
+            head_angle_rad: Current head tilt angle in radians (positive = looking up)
 
         Returns:
             Tuple of (detections list, annotated image)
         """
-        detections = self.detect_cubes(image)
+        detections = self.detect_cubes(image, head_angle_rad)
         annotated_image = self.draw_detections(image, detections)
         return detections, annotated_image
 
@@ -433,8 +436,11 @@ class AnnotatedVisionProcessor(VisionProcessor):
             # Import here to avoid circular dependency
             from . import event
 
+            # Get current head angle from robot state
+            head_angle_rad = cli.head_angle.radians if hasattr(cli, 'head_angle') else 0.0
+
             # Detect cubes and annotate
-            detections, annotated_image = self.detect_and_annotate(image)
+            detections, annotated_image = self.detect_and_annotate(image, head_angle_rad)
 
             # Dispatch annotated image event
             self.client.dispatch(event.EvtAnnotatedCameraImage, cli, annotated_image, detections)

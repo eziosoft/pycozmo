@@ -1,14 +1,13 @@
+import os
+import sys
+from collections import defaultdict
+
 import cv2
 import numpy as np
-import glob
-import sys
-import os
-from collections import defaultdict
 from scipy.spatial.transform import Rotation as R, Slerp
 
 # Add the tests directory to path so we can import world_3d_viewer
 sys.path.append(os.path.dirname(__file__))
-from world_3d_viewer import World3DViewer
 
 
 class CubeFusionTracker:
@@ -34,10 +33,11 @@ class CubeFusionTracker:
         # Track each cube: {cube_id: cube_state}
         self.cubes = {}
 
-    def update(self, detections):
+    def update(self, detections, head_angle_rad=0.0):
         """
         Update cube states from new detections
         :param detections: List of detection dicts with 'cube_id', 'face_type', 'position', 'rotation_matrix', etc.
+        :param head_angle_rad: Current head tilt angle in radians (positive = looking up)
         :return: Dict of {cube_id: fused_cube_state}
         """
         # Group detections by cube_id
@@ -56,6 +56,10 @@ class CubeFusionTracker:
         # Process each cube's detections
         for cube_id, cube_detections in detections_by_cube.items():
             fused_state = self._fuse_detections(cube_detections)
+
+            # Apply head tilt transformation to position
+            # Head tilt rotates camera around X-axis (pitch), affecting Y and Z coordinates
+            fused_state['position'] = self._apply_head_tilt(fused_state['position'], head_angle_rad)
 
             if cube_id in self.cubes:
                 # Smooth with previous state
@@ -275,6 +279,36 @@ class CubeFusionTracker:
             cube_rotation = face_rotation
 
         return cube_rotation
+
+    def _apply_head_tilt(self, position, head_angle_rad):
+        """
+        Transform cube position from camera coordinates to robot body coordinates.
+
+        The camera rotates with the head around the robot's X-axis (pitch rotation).
+        When the head tilts up (positive angle), the camera looks up, and detected
+        objects appear lower in the camera frame than they actually are in world space.
+
+        :param position: 3D position in camera coordinates [x, y, z] (mm)
+        :param head_angle_rad: Head tilt angle in radians (positive = looking up)
+        :return: 3D position in robot body coordinates [x, y, z] (mm)
+        """
+        # Create rotation matrix for head tilt (rotation around X-axis)
+        # This transforms from camera frame to robot body frame
+        cos_a = np.cos(head_angle_rad)
+        sin_a = np.sin(head_angle_rad)
+
+        # Rotation matrix for pitch around X-axis
+        R_head = np.array([
+            [1, 0, 0],
+            [0, cos_a, -sin_a],
+            [0, sin_a, cos_a]
+        ], dtype=np.float32)
+
+        # Apply rotation to position
+        # This accounts for the fact that the camera is tilted relative to the robot body
+        transformed_position = R_head @ position
+
+        return transformed_position
 
 
 class CozmoCubeDetector:
