@@ -313,7 +313,8 @@ class CubeFusionTracker:
 
 class CozmoCubeDetector:
     def __init__(self, camera_matrix, dist_coeffs, target_markers, square_size_mm=20.0, score_threshold=0.6,
-                 downscale_factor=1.0, use_clahe=True, max_detections=None, min_area=100, max_area_ratio=0.8):
+                 downscale_factor=1.0, use_clahe=True, max_detections=None, min_area=100, max_area_ratio=0.8,
+                 denoise_strength=7):
         """
         :param target_markers: List of 32x32 gray bitmaps (numpy arrays).
         :param square_size_mm: Real life square side length (default 25mm).
@@ -323,6 +324,7 @@ class CozmoCubeDetector:
         :param max_detections: Stop processing after finding N markers (None = find all)
         :param min_area: Minimum contour area in pixels (default 100)
         :param max_area_ratio: Maximum contour area as fraction of image area (default 0.4)
+        :param denoise_strength: Strength of noise reduction (0=disabled, 3-10 recommended, higher=more smoothing)
         """
         self.camera_matrix = camera_matrix
         self.dist_coeffs = dist_coeffs
@@ -334,6 +336,7 @@ class CozmoCubeDetector:
         self.max_detections = max_detections
         self.min_area = min_area
         self.max_area_ratio = max_area_ratio
+        self.denoise_strength = denoise_strength
         self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)) if use_clahe else None
 
         # Define 3D object points for Pose Estimation (SolvePnP)
@@ -379,6 +382,10 @@ class CozmoCubeDetector:
         else:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+        # Apply noise reduction if enabled
+        if self.denoise_strength > 0:
+            gray = self._denoise_image(gray)
+
         # Apply CLAHE if enabled
         enhanced = self.clahe.apply(gray) if self.use_clahe else gray
 
@@ -398,6 +405,30 @@ class CozmoCubeDetector:
                     det['ordered_corners'] = (det['ordered_corners'] * scale).astype(np.int32)
 
         return detections
+
+    def _denoise_image(self, gray_image):
+        """
+        Apply noise reduction to grayscale image using Non-Local Means Denoising.
+
+        This algorithm is particularly effective for images from poor quality cameras
+        by removing pixel noise while preserving edges and important features.
+
+        :param gray_image: Input grayscale image
+        :return: Denoised grayscale image
+        """
+        # Use fastNlMeansDenoising for grayscale images
+        # Parameters:
+        # - h: filter strength. Higher h value removes more noise but also removes details
+        #      Recommended: 3-10 for typical noise, 10-15 for very noisy images
+        # - templateWindowSize: size of template patch (should be odd), typically 7
+        # - searchWindowSize: size of search area (should be odd), typically 21
+        denoised = cv2.fastNlMeansDenoising(
+            gray_image,
+            h=self.denoise_strength,
+            templateWindowSize=7,
+            searchWindowSize=21
+        )
+        return denoised
 
     def _run_detection_pass(self, img):
         """Internal detection logic for a single image state (normal or negative)."""

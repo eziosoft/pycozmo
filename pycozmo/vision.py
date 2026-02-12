@@ -123,7 +123,8 @@ class VisionProcessor:
             target_markers,
             downscale_factor=1.0,
             use_clahe=True,
-            max_detections=3  # Cozmo has 3 cubes
+            max_detections=3,  # Cozmo has 3 cubes
+            denoise_strength=10  # Enable noise reduction for poor quality camera
         )
 
         # Create fusion tracker
