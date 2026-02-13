@@ -334,13 +334,13 @@ class World3DViewer:
         # Ensure rotation_matrix is float32
         rotation_matrix = rotation_matrix.astype(np.float32)
 
-        # Transform position: negate Y
-        position_gl = np.array([position[0], -position[1], position[2]], dtype=np.float32)
+        # Transform position: negate X and Y to correct mirror reflection
+        position_gl = np.array([-position[0], -position[1], position[2]], dtype=np.float32)
 
         # Transform rotation using similarity transformation: R_gl = T @ R_cv @ T^T
-        # where T flips the Y axis
+        # where T mirrors over the YZ plane (flips X)
         T = np.array([
-            [1,  0, 0],
+            [-1,  0, 0],
             [0, -1, 0],
             [0,  0, 1]
         ], dtype=np.float32)
