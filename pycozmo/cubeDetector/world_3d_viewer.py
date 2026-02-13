@@ -196,23 +196,28 @@ class World3DViewer:
         # Enable lighting for 3D models
         glEnable(GL_LIGHTING)
         glEnable(GL_LIGHT0)
+        glEnable(GL_LIGHT1)  # Add second light
         glEnable(GL_COLOR_MATERIAL)
         glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
 
-        # Set up light
+        # Set up main light (front)
         glLightfv(GL_LIGHT0, GL_POSITION, [0, 200, -500, 1])
         glLightfv(GL_LIGHT0, GL_AMBIENT, [0.3, 0.3, 0.3, 1])
         glLightfv(GL_LIGHT0, GL_DIFFUSE, [0.8, 0.8, 0.8, 1])
+
+        # Set up secondary light (back)
+        glLightfv(GL_LIGHT1, GL_POSITION, [0, 200, 500, 1])
+        glLightfv(GL_LIGHT1, GL_AMBIENT, [0.2, 0.2, 0.2, 1])
+        glLightfv(GL_LIGHT1, GL_DIFFUSE, [0.6, 0.6, 0.6, 1])
 
         glMatrixMode(GL_PROJECTION)
         gluPerspective(45, (window_size[0] / window_size[1]), 0.1, 5000.0)
         glMatrixMode(GL_MODELVIEW)
 
-        # Camera position and orientation
-        # Start with camera slightly behind origin, looking forward down +Z
-        # This gives a view similar to the physical camera's perspective
-        self.camera_pos = [0, -50, -100]  # X, Y, Z in mm - slightly back and up from origin
-        self.camera_rot = [5, 180, 0]  # Pitch, Yaw, Roll - slight downward tilt, facing opposite direction
+        # Camera position and orientation - side view at 45 degrees up
+        # Position camera to the side and above, looking at the robot
+        self.camera_pos = [200, -100, -200]  # X, Y, Z in mm - to the side and up
+        self.camera_rot = [45, 135, 0]  # Pitch, Yaw, Roll - 45° up, facing the robot
 
         # Store detected cubes
         self.cubes = {}  # {cube_id: cube_data}
@@ -334,8 +339,8 @@ class World3DViewer:
         # Ensure rotation_matrix is float32
         rotation_matrix = rotation_matrix.astype(np.float32)
 
-        # Transform position: negate X and Y to correct mirror reflection
-        position_gl = np.array([-position[0], -position[1], position[2]], dtype=np.float32)
+        # Transform position: negate X and Y to correct mirror reflection, add camera height
+        position_gl = np.array([-position[0], -position[1] + 40, position[2]], dtype=np.float32)
 
         # Transform rotation using similarity transformation: R_gl = T @ R_cv @ T^T
         # where T mirrors over the YZ plane (flips X)
@@ -615,8 +620,7 @@ class World3DViewer:
         ]
 
         # Draw faces with textures or colors
-        glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        # No transparency - use solid colors
 
         # Get textures for this cube if available
         cube_textures = self.textures.get(cube_id, {})
@@ -628,14 +632,14 @@ class World3DViewer:
 
             if face_idx == 2:  # Bottom face
                 glDisable(GL_TEXTURE_2D)
-                glColor4f(1.0, 1.0, 1.0, 1.0)  # White for bottom
+                glColor3f(1.0, 1.0, 1.0)  # White for bottom
             elif face_idx == 3:  # Top face
                 glDisable(GL_TEXTURE_2D)
-                glColor4f(1.0, 1.0, 1.0, 1.0)  # White for top
+                glColor3f(1.0, 1.0, 1.0)  # White for top
             else:
                 # Wall faces - use white with full opacity
                 glDisable(GL_TEXTURE_2D)
-                glColor4f(1.0, 1.0, 1.0, 1.0)  # White for walls
+                glColor3f(1.0, 1.0, 1.0)  # White for walls
 
             glBegin(GL_QUADS)
             for i, vertex_idx in enumerate(face_verts):
@@ -676,73 +680,95 @@ class World3DViewer:
         glPopMatrix()
 
     def _draw_camera(self):
-        """Draw camera frustum and direction indicator at origin"""
+        """Draw robot as a box of dimensions 60x90x55mm positioned on surface with camera at 40mm height"""
         glDisable(GL_LIGHTING)
         glPushMatrix()
 
-        # Camera is at origin, looking down +Z axis
-        glColor3f(1.0, 1.0, 0.0)  # Yellow
-        glLineWidth(2)
+        # Robot box dimensions: 60x90x55mm (width x height x depth)
+        width = 55.0   # X dimension
+        height = 60.0  # Y dimension
+        depth = 90.0   # Z dimension
 
-        # Draw camera pyramid (frustum)
-        size = 50
-        depth = 100
+        # Position the robot box so camera is at origin and bottom is on surface
+        # Camera is at (0,0,0) and 40mm above surface, so robot box needs to be offset
+        # Robot front face should be at Z=0, bottom at Y=0, and camera at Y=40mm
+        robot_x = 0.0
+        robot_y = 0.0  # Robot bottom at Y=0 (on ground), camera at Y=40mm
+        robot_z = -depth/2.0  # Position so front face is at Z=0
 
+        glTranslatef(robot_x, robot_y, robot_z)
+
+        # Half dimensions for box drawing
+        half_width = width / 2.0
+        half_height = height / 2.0
+        half_depth = depth / 2.0
+
+        # Define vertices of the box (centered at translation point)
+        vertices = [
+            [-half_width, 0, -half_depth],          # 0 - back bottom left (bottom at Y=0)
+            [half_width, 0, -half_depth],           # 1 - back bottom right
+            [half_width, height, -half_depth],      # 2 - back top right
+            [-half_width, height, -half_depth],     # 3 - back top left
+            [-half_width, 0, half_depth],           # 4 - front bottom left
+            [half_width, 0, half_depth],            # 5 - front bottom right
+            [half_width, height, half_depth],       # 6 - front top right
+            [-half_width, height, half_depth]       # 7 - front top left
+        ]
+
+        # Robot color - solid gray
+        glColor3f(0.5, 0.5, 0.5)  # Gray without transparency
+        glLineWidth(3)
+
+        # Draw box edges
         glBegin(GL_LINES)
-        # Lines from origin to corners
-        glVertex3f(0, 0, 0)
-        glVertex3f(-size, -size, depth)
-
-        glVertex3f(0, 0, 0)
-        glVertex3f(size, -size, depth)
-
-        glVertex3f(0, 0, 0)
-        glVertex3f(size, size, depth)
-
-        glVertex3f(0, 0, 0)
-        glVertex3f(-size, size, depth)
-
-        # Rectangle at the end
-        glVertex3f(-size, -size, depth)
-        glVertex3f(size, -size, depth)
-
-        glVertex3f(size, -size, depth)
-        glVertex3f(size, size, depth)
-
-        glVertex3f(size, size, depth)
-        glVertex3f(-size, size, depth)
-
-        glVertex3f(-size, size, depth)
-        glVertex3f(-size, -size, depth)
+        edges = [
+            (0, 1), (1, 2), (2, 3), (3, 0),  # Back face
+            (4, 5), (5, 6), (6, 7), (7, 4),  # Front face
+            (0, 4), (1, 5), (2, 6), (3, 7)   # Connecting edges
+        ]
+        for edge in edges:
+            for vertex in edge:
+                glVertex3fv(vertices[vertex])
         glEnd()
 
-        # Draw prominent direction arrow along +Z axis (viewing direction)
-        glColor3f(1.0, 0.5, 0.0)  # Orange - highly visible
-        glLineWidth(4)
+        # Draw filled faces for better visibility
+        glColor3f(0.5, 0.5, 0.5)  # Same gray for fill
+        glBegin(GL_QUADS)
+        # Front face
+        glVertex3fv(vertices[4])
+        glVertex3fv(vertices[5])
+        glVertex3fv(vertices[6])
+        glVertex3fv(vertices[7])
 
-        arrow_length = 150
-        arrow_head_size = 20
+        # Back face
+        glVertex3fv(vertices[0])
+        glVertex3fv(vertices[1])
+        glVertex3fv(vertices[2])
+        glVertex3fv(vertices[3])
 
-        # Main arrow shaft
-        glBegin(GL_LINES)
-        glVertex3f(0, 0, 0)
-        glVertex3f(0, 0, arrow_length)
-        glEnd()
+        # Left face
+        glVertex3fv(vertices[0])
+        glVertex3fv(vertices[3])
+        glVertex3fv(vertices[7])
+        glVertex3fv(vertices[4])
 
-        # Arrow head (cone shape)
-        glBegin(GL_LINES)
-        # Four lines forming arrow head
-        glVertex3f(0, 0, arrow_length)
-        glVertex3f(-arrow_head_size, -arrow_head_size, arrow_length - arrow_head_size)
+        # Right face
+        glVertex3fv(vertices[1])
+        glVertex3fv(vertices[2])
+        glVertex3fv(vertices[6])
+        glVertex3fv(vertices[5])
 
-        glVertex3f(0, 0, arrow_length)
-        glVertex3f(arrow_head_size, -arrow_head_size, arrow_length - arrow_head_size)
+        # Top face
+        glVertex3fv(vertices[3])
+        glVertex3fv(vertices[2])
+        glVertex3fv(vertices[6])
+        glVertex3fv(vertices[7])
 
-        glVertex3f(0, 0, arrow_length)
-        glVertex3f(arrow_head_size, arrow_head_size, arrow_length - arrow_head_size)
-
-        glVertex3f(0, 0, arrow_length)
-        glVertex3f(-arrow_head_size, arrow_head_size, arrow_length - arrow_head_size)
+        # Bottom face (on surface)
+        glVertex3fv(vertices[0])
+        glVertex3fv(vertices[1])
+        glVertex3fv(vertices[5])
+        glVertex3fv(vertices[4])
         glEnd()
 
         glLineWidth(1)
@@ -803,6 +829,7 @@ class World3DViewer:
         self._draw_grid()
         self._draw_axes()
         self._draw_camera()
+        self._draw_floor()
 
         # Draw all cubes (create snapshot to avoid iteration errors)
         cubes_snapshot = dict(self.cubes)
@@ -821,6 +848,18 @@ class World3DViewer:
     def close(self):
         """Clean up and close the viewer"""
         pygame.quit()
+
+    def _draw_floor(self, size=2000):
+        """Draw a solid floor plane at Y=0"""
+        glDisable(GL_LIGHTING)
+        glColor3f(0.8, 0.8, 0.8)  # Light gray floor
+        glBegin(GL_QUADS)
+        glVertex3f(-size, 0, -size)
+        glVertex3f(size, 0, -size)
+        glVertex3f(size, 0, size)
+        glVertex3f(-size, 0, size)
+        glEnd()
+        glEnable(GL_LIGHTING)
 
 
 if __name__ == "__main__":

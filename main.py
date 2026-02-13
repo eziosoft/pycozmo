@@ -69,18 +69,6 @@ class VisionDisplay:
         # Window names
         self.window_name = "PyCozmo Vision Test - Normal (Left) | Annotated (Right)"
 
-        print("\n" + "=" * 70)
-        print("PyCozmo Vision System - Live Display")
-        print("=" * 70)
-        print("\nControls:")
-        print("  'q' - Quit")
-        print("  's' - Save current frames")
-        print("  'c' - Toggle cube detection")
-        print("  'f' - Toggle FPS display")
-        if self.use_3d_viewer:
-            print("  '3' - Toggle 3D viewer")
-        print("=" * 70 + "\n")
-
         # Cube tracking variables
         self.cube_factory_id_map = {}  # Map detected cube_id (1,2,3) to factory_id
         self.currently_connected_cube_id = None  # Track which cube is currently connected
@@ -428,26 +416,8 @@ class VisionDisplay:
                     print("\n🛑 3D viewer closed")
                     self.running = False
 
-            # Handle keyboard input
-            key = cv2.waitKey(1) & 0xFF
-
-            if key == ord('q'):
-                print("\n🛑 Quit requested")
-                self.running = False
-            elif key == ord('s'):
-                print("\n📸 Saving frames...")
-                self.save_frames()
-            elif key == ord('f'):
-                self.show_fps = not self.show_fps
-                print(f"\n📊 FPS display: {'ON' if self.show_fps else 'OFF'}")
-            elif key == ord('c'):
-                self.detection_enabled = not self.detection_enabled
-                print(f"\n🎲 Cube detection: {'ON' if self.detection_enabled else 'OFF'}")
-                # Note: This doesn't actually disable detection, just changes the flag
-                # To fully disable, you'd need to stop the vision processor
-            elif key == ord('3') and self.use_3d_viewer:
-                self.show_3d = not self.show_3d
-                print(f"\n🎮 3D viewer: {'ON' if self.show_3d else 'OFF'}")
+            # Handle keyboard input (disabled)
+            cv2.waitKey(1)
 
         cv2.destroyAllWindows()
         if self.viewer_3d:
