@@ -354,6 +354,16 @@ class VisionDisplay:
         if not self.cube_factory_id_map:
             return
 
+        # Throttle updates to once per second to avoid slowing down video
+        current_time = time.time()
+        if not hasattr(self, '_last_light_update'):
+            self._last_light_update = 0
+
+        if current_time - self._last_light_update < 1.0:
+            return  # Skip update if less than 1 second has passed
+
+        self._last_light_update = current_time
+
         # Get currently detected cube IDs
         detected_cube_ids = set(det.cube_id for det in self.latest_detections)
 
