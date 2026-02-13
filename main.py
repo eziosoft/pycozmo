@@ -81,6 +81,10 @@ class VisionDisplay:
             print("  '3' - Toggle 3D viewer")
         print("=" * 70 + "\n")
 
+        # Cube tracking variables
+        self.cube_factory_id_map = {}  # Map detected cube_id (1,2,3) to factory_id
+        self.currently_connected_cube_id = None  # Track which cube is currently connected
+
     def on_raw_camera_image(self, cli, image):
         """Handler for raw camera images."""
         self.latest_raw_frame = image
@@ -97,6 +101,9 @@ class VisionDisplay:
         """Handler for annotated camera images."""
         self.latest_annotated_frame = annotated_image
         self.latest_detections = detections
+
+        # Update cube lights based on detections
+        self.update_cube_lights_on_detection(cli)
 
         # Update 3D viewer if enabled
         if self.use_3d_viewer and self.show_3d and self.viewer_3d:
@@ -285,6 +292,129 @@ class VisionDisplay:
 
         print(f"   Detections: {len(self.latest_detections)}")
 
+    def setup_cube_mapping(self, cli):
+        """Discover available cubes and create mapping from detected cube_id to factory_id."""
+        print("\n" + "="*70)
+        print("🔗 DISCOVERING CUBES")
+        print("="*70)
+
+        # Wait for objects to be discovered
+        timeout = 5.0
+        start_time = time.time()
+        print(f"   Waiting up to {timeout}s for cubes to be discovered...")
+        while time.time() - start_time < timeout:
+            available_objects = dict(cli.available_objects)
+            if available_objects:
+                print(f"   ✅ Found {len(available_objects)} objects!")
+                break
+            time.sleep(0.1)
+        else:
+            print(f"   ⏱️  Timeout waiting for objects")
+
+        available_objects = dict(cli.available_objects)
+        if not available_objects:
+            print("⚠️  No cubes found")
+            return
+
+        # Find all light cubes
+        cube_types = [
+            pycozmo.protocol_encoder.ObjectType.Block_LIGHTCUBE1,
+            pycozmo.protocol_encoder.ObjectType.Block_LIGHTCUBE2,
+            pycozmo.protocol_encoder.ObjectType.Block_LIGHTCUBE3
+        ]
+
+        available_cubes = []
+        for factory_id, obj in available_objects.items():
+            if obj.object_type in cube_types:
+                available_cubes.append((factory_id, obj.object_type))
+
+        if not available_cubes:
+            print("⚠️  No light cubes found")
+            return
+
+        print(f"\n📋 Available cubes:")
+        # Map detected cube_id to factory_id based on ObjectType
+        # The cube detector assigns:
+        # cube_id 1 (markers 0-5)   -> Block_LIGHTCUBE1
+        # cube_id 2 (markers 6-11)  -> Block_LIGHTCUBE2
+        # cube_id 3 (markers 12-17) -> Block_LIGHTCUBE3
+        for factory_id, obj_type in available_cubes:
+            if obj_type == pycozmo.protocol_encoder.ObjectType.Block_LIGHTCUBE1:
+                detected_cube_id = 1
+            elif obj_type == pycozmo.protocol_encoder.ObjectType.Block_LIGHTCUBE2:
+                detected_cube_id = 2
+            elif obj_type == pycozmo.protocol_encoder.ObjectType.Block_LIGHTCUBE3:
+                detected_cube_id = 3
+            else:
+                continue
+
+            self.cube_factory_id_map[detected_cube_id] = factory_id
+            print(f"   Detected cube_id {detected_cube_id} -> Factory ID 0x{factory_id:08x} ({obj_type.name})")
+
+        print(f"\n✅ Discovered {len(self.cube_factory_id_map)} cube(s)")
+        print(f"📋 Cube mapping: {self.cube_factory_id_map}")
+        print("⚠️  Note: Cozmo can only connect to ONE cube at a time")
+        print("   Cubes will be connected on-demand when detected")
+        print("="*70 + "\n")
+
+    def update_cube_lights_on_detection(self, cli):
+        """Update cube lights based on current detections."""
+        if not self.detection_enabled:
+            return
+
+        # If no mapping exists, we can't control lights
+        if not self.cube_factory_id_map:
+            return
+
+        # Get currently detected cube IDs
+        detected_cube_ids = set(det.cube_id for det in self.latest_detections)
+
+        # Only print when detections change
+        if not hasattr(self, '_last_detected_ids'):
+            self._last_detected_ids = set()
+
+        if detected_cube_ids != self._last_detected_ids:
+            print(f"🔍 Detected cube IDs: {sorted(detected_cube_ids)}")
+            self._last_detected_ids = detected_cube_ids
+
+        # Light up detected cubes (connect and set blue)
+        for cube_id in detected_cube_ids:
+            if cube_id in self.cube_factory_id_map:
+                factory_id = self.cube_factory_id_map[cube_id]
+
+                # Connect to this cube if not already connected
+                if self.currently_connected_cube_id != cube_id:
+                    try:
+                        pkt = pycozmo.protocol_encoder.ObjectConnect(factory_id=factory_id, connect=True)
+                        cli.conn.send(pkt)
+                        time.sleep(0.1)  # Brief wait for connection
+                        self.currently_connected_cube_id = cube_id
+                    except Exception as e:
+                        print(f"⚠️  Error connecting to cube {cube_id}: {e}")
+                        continue
+
+                # Get the object_id from connected_objects
+                connected_objects = dict(cli.connected_objects)
+                if connected_objects:
+                    object_id = list(connected_objects.keys())[0]  # Should only be one
+
+                    try:
+                        # Select cube
+                        pkt = pycozmo.protocol_encoder.CubeId(object_id=object_id)
+                        cli.conn.send(pkt)
+
+                        # Set blue lights
+                        pkt = pycozmo.protocol_encoder.CubeLights(states=(
+                            pycozmo.lights.blue_light,
+                            pycozmo.lights.blue_light,
+                            pycozmo.lights.blue_light,
+                            pycozmo.lights.blue_light
+                        ))
+                        cli.conn.send(pkt)
+
+                    except Exception as e:
+                        print(f"⚠️  Error controlling cube {cube_id} lights: {e}")
+
     def run(self):
         """Main display loop."""
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
@@ -409,6 +539,9 @@ def main():
 
             # Wait for camera to stabilize
             time.sleep(2.0)
+
+            # Discover cubes and setup mapping
+            display.setup_cube_mapping(cli)
 
             print("✨ Starting display...\n")
             if display.use_3d_viewer:
