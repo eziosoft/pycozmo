@@ -1,5 +1,18 @@
 """
 Camera calibration module for retrieving calibration data from Cozmo.
+
+This module retrieves camera intrinsic calibration parameters from Cozmo's NVRAM.
+The calibration data includes focal lengths, principal point, and distortion coefficients.
+
+Cozmo's calibration format appears to be (9 floats):
+[fx, fy, cx, cy, k1, k2, k3, p1, p2]
+
+However, Cozmo's stored distortion coefficients are often unreliable and contain
+garbage values. For better results, this implementation uses zero distortion
+coefficients for Cozmo, which provides more reliable 3D pose estimation.
+
+Note: Raw camera images from Cozmo may be distorted and require undistortion
+using the calibration data. Undistortion is disabled by default to avoid warping.
 """
 
 from typing import Optional
@@ -122,8 +135,16 @@ class CameraCalibrationRetriever:
         if len(data_bytes) >= 36:
             try:
                 vals = struct.unpack('<9f', data_bytes[:36])
-                fx, fy, cx, cy, k1, k2, p1, p2, k3 = vals
+                fx, fy, cx, cy, v1, v2, v3, v4, v5 = vals
                 if 100 < fx < 1000 and 100 < fy < 1000:
+                    # For Cozmo, the stored distortion coefficients are unreliable
+                    # and often contain garbage values. Use zero distortion for better results.
+                    logger.info(f"Cozmo calibration data parsed: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}")
+                    logger.info(f"Raw distortion values: {v1}, {v2}, {v3}, {v4}, {v5} (using zeros for reliability)")
+
+                    # Use zero distortion coefficients for Cozmo
+                    k1 = k2 = k3 = p1 = p2 = 0.0
+
                     return CameraCalibration(fx=fx, fy=fy, cx=cx, cy=cy,
                                             k1=k1, k2=k2, k3=k3, p1=p1, p2=p2)
             except:
@@ -135,6 +156,12 @@ class CameraCalibrationRetriever:
                 vals = struct.unpack('<9d', data_bytes[:72])
                 fx, fy, cx, cy, k1, k2, p1, p2, k3 = vals
                 if 100 < fx < 1000 and 100 < fy < 1000:
+                    # For Cozmo, use zero distortion coefficients
+                    logger.info(f"Cozmo calibration data parsed (float64): fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}")
+                    logger.info("Using zero distortion coefficients for Cozmo reliability")
+
+                    k1 = k2 = k3 = p1 = p2 = 0.0
+
                     return CameraCalibration(fx=fx, fy=fy, cx=cx, cy=cy,
                                             k1=k1, k2=k2, k3=k3, p1=p1, p2=p2)
             except:

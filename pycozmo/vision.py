@@ -370,7 +370,7 @@ class AnnotatedVisionProcessor(VisionProcessor):
     """
 
     def __init__(self, client, camera_calibration: CameraCalibration,
-                 process_every_n_frames: int = 1):
+                 process_every_n_frames: int = 1, undistort: bool = False):
         """
         Initialize the annotated vision processor.
 
@@ -379,11 +379,14 @@ class AnnotatedVisionProcessor(VisionProcessor):
             camera_calibration: Camera calibration from Cozmo (required)
             process_every_n_frames: Process every Nth frame (1 = all frames,
                                    2 = every other frame, etc.)
+            undistort: Whether to undistort images using camera calibration
+                       (default: False, as undistortion may not be needed or coefficients may be incorrect)
         """
         super().__init__(camera_calibration=camera_calibration)
 
         self.client = client
         self.process_every_n_frames = process_every_n_frames
+        self.undistort = undistort
         self._frame_counter = 0
 
         # Import here to avoid circular dependency
@@ -414,12 +417,15 @@ class AnnotatedVisionProcessor(VisionProcessor):
             # Get current head angle from robot state
             head_angle_rad = cli.head_angle.radians if hasattr(cli, 'head_angle') else 0.0
 
-            # Undistort the image using camera calibration
-            img_array = np.array(image)  # RGB
-            img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-            undistorted_bgr = cv2.undistort(img_bgr, self.camera_calibration.camera_matrix, self.camera_calibration.distortion_coefficients)
-            undistorted_rgb = cv2.cvtColor(undistorted_bgr, cv2.COLOR_BGR2RGB)
-            undistorted_image = Image.fromarray(undistorted_rgb)
+            # Undistort the image using camera calibration (if enabled)
+            if self.undistort:
+                img_array = np.array(image)  # RGB
+                img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                undistorted_bgr = cv2.undistort(img_bgr, self.camera_calibration.camera_matrix, self.camera_calibration.distortion_coefficients)
+                undistorted_rgb = cv2.cvtColor(undistorted_bgr, cv2.COLOR_BGR2RGB)
+                undistorted_image = Image.fromarray(undistorted_rgb)
+            else:
+                undistorted_image = image  # Use original image without undistortion
 
             # Detect cubes and annotate
             detections, annotated_image = self.detect_and_annotate(undistorted_image, head_angle_rad)

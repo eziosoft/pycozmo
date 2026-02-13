@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 import sys
 import os
+import argparse
 
 import pycozmo
 from pycozmo import vision
@@ -326,6 +327,11 @@ class VisionDisplay:
 def main():
     """Main entry point."""
 
+    parser = argparse.ArgumentParser(description="PyCozmo Vision System Test")
+    parser.add_argument('--no-undistort', action='store_true',
+                       help='Disable image undistortion (disabled by default - undistortion may cause warping)')
+    args = parser.parse_args()
+
     # Create display handler with 3D viewer
     display = VisionDisplay(use_3d_viewer=VIEWER_3D_AVAILABLE)
 
@@ -351,6 +357,10 @@ def main():
             print(f"✅ Camera calibration retrieved:")
             print(f"   fx={camera_calibration.fx:.2f}, fy={camera_calibration.fy:.2f}")
             print(f"   cx={camera_calibration.cx:.2f}, cy={camera_calibration.cy:.2f}")
+            print(f"   k1={camera_calibration.k1:.6f}, k2={camera_calibration.k2:.6f}, k3={camera_calibration.k3:.6f}")
+            print(f"   p1={camera_calibration.p1:.6f}, p2={camera_calibration.p2:.6f}")
+            print(f"   Image size: {camera_calibration.image_width}x{camera_calibration.image_height}")
+            print("   ℹ️  Using zero distortion coefficients for Cozmo reliability")
 
             # Register handler for raw frames
             cli.add_handler(
@@ -360,10 +370,13 @@ def main():
 
             # Create vision processor with cubeDetector.py
             print("🎨 Initializing vision processor with cubeDetector.py...")
+            undistort_enabled = not args.no_undistort
+            print(f"   Undistortion: {'ENABLED' if undistort_enabled else 'DISABLED (default - undistortion may cause warping)'}")
             vision_processor = vision.AnnotatedVisionProcessor(
                 client=cli,
                 camera_calibration=camera_calibration,
-                process_every_n_frames=1  # Process every frame (fast computer)
+                process_every_n_frames=1,  # Process every frame (fast computer)
+                undistort=undistort_enabled
             )
 
             print("✅ Cube detector initialized with camera calibration")
