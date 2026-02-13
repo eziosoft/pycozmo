@@ -497,7 +497,7 @@ class CozmoCubeDetector:
 
                     # Solve PnP for pose estimation
                     success, rvec, tvec = cv2.solvePnP(
-                        self.obj_points, ordered_pts, self.scaled_camera_matrix, self.dist_coeffs
+                        self.obj_points, ordered_pts, self.scaled_camera_matrix, None
                     )
                     if success:
                         # Get cube orientation info

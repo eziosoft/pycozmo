@@ -392,7 +392,7 @@ def main():
             print("🎥 Enabling camera...")
             cli.enable_camera(enable=True, color=False)
             # Set camera params for auto exposure
-            cli.set_camera_params(exposure_ms=20)
+            cli.set_camera_params(exposure_ms=100)
 
             # Wait for camera to stabilize
             time.sleep(2.0)

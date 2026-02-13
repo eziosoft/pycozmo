@@ -185,6 +185,7 @@ class VisionProcessor:
             # Convert RGB to BGR for OpenCV
             img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
 
+
             # Save raw frame for debug
             if self.cube_detector.debug:
                 self.cube_detector.debug_images['original'] = img_bgr.copy()
@@ -413,8 +414,15 @@ class AnnotatedVisionProcessor(VisionProcessor):
             # Get current head angle from robot state
             head_angle_rad = cli.head_angle.radians if hasattr(cli, 'head_angle') else 0.0
 
+            # Undistort the image using camera calibration
+            img_array = np.array(image)  # RGB
+            img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+            undistorted_bgr = cv2.undistort(img_bgr, self.camera_calibration.camera_matrix, self.camera_calibration.distortion_coefficients)
+            undistorted_rgb = cv2.cvtColor(undistorted_bgr, cv2.COLOR_BGR2RGB)
+            undistorted_image = Image.fromarray(undistorted_rgb)
+
             # Detect cubes and annotate
-            detections, annotated_image = self.detect_and_annotate(image, head_angle_rad)
+            detections, annotated_image = self.detect_and_annotate(undistorted_image, head_angle_rad)
 
             # Dispatch annotated image event
             self.client.dispatch(event.EvtAnnotatedCameraImage, cli, annotated_image, detections)
