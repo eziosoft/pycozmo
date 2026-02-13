@@ -126,7 +126,7 @@ class VisionProcessor:
             denoise_strength=0  # Enable noise reduction for poor quality camera
         )
 
-        self.cube_detector.set_debug(True)
+        # self.cube_detector.set_debug(True)
 
         # Create fusion tracker
         self.cube_tracker = CubeFusionTracker(
