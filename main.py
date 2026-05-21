@@ -413,7 +413,31 @@ class VisionDisplay:
                     except Exception as e:
                         print(f"⚠️  Error controlling cube {cube_id} lights: {e}")
 
-    def run(self):
+    def on_robot_delocalized(self, cli):
+        """Handler for robot delocalization events."""
+        print("🚫 Robot delocalized! Resetting origin...")
+        try:
+            pkt = pycozmo.protocol_encoder.SetOrigin()
+            cli.conn.send(pkt)
+            print("✅ Origin reset to current position")
+        except Exception as e:
+            print(f"⚠️  Error resetting origin: {e}")
+
+    def on_robot_state(self, cli):
+        """Handler for robot state updates."""
+        # Robot state is available in cli.pose, cli.pose_pitch, etc.
+        # State updates arrive every 30ms (~33Hz)
+        # For now, just store for potential use (could update 3D viewer robot position)
+        if not hasattr(self, 'latest_robot_state'):
+            self.latest_robot_state = None
+
+        # Access state from cli object if needed:
+        # - cli.pose (position and orientation)
+        # - cli.head_angle, cli.lift_position
+        # - cli.left_wheel_speed, cli.right_wheel_speed
+        # - cli.battery_voltage, cli.accel, cli.gyro
+
+    def run(self, cli):
         """Main display loop."""
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
 
@@ -426,8 +450,29 @@ class VisionDisplay:
                     print("\n🛑 3D viewer closed")
                     self.running = False
 
-            # Handle keyboard input (disabled)
-            cv2.waitKey(1)
+            # Handle keyboard input for robot control
+            key = cv2.waitKey(1) & 0xFF
+
+            if key == ord('i') or key == ord('I'):
+                # Forward
+                pkt = pycozmo.protocol_encoder.DriveWheels(lwheel_speed_mmps=50, rwheel_speed_mmps=50)
+                cli.conn.send(pkt)
+            elif key == ord('k') or key == ord('K'):
+                # Backward
+                pkt = pycozmo.protocol_encoder.DriveWheels(lwheel_speed_mmps=-50, rwheel_speed_mmps=-50)
+                cli.conn.send(pkt)
+            elif key == ord('j') or key == ord('J'):
+                # Left turn
+                pkt = pycozmo.protocol_encoder.DriveWheels(lwheel_speed_mmps=-50, rwheel_speed_mmps=50)
+                cli.conn.send(pkt)
+            elif key == ord('l') or key == ord('L'):
+                # Right turn
+                pkt = pycozmo.protocol_encoder.DriveWheels(lwheel_speed_mmps=50, rwheel_speed_mmps=-50)
+                cli.conn.send(pkt)
+            elif key == ord(' '):
+                # Stop
+                pkt = pycozmo.protocol_encoder.StopAllMotors()
+                cli.conn.send(pkt)
 
         cv2.destroyAllWindows()
         if self.viewer_3d:
@@ -523,6 +568,19 @@ def main():
             # Discover cubes and setup mapping
             display.setup_cube_mapping(cli)
 
+            # Set origin for localization
+            print("📍 Setting localization origin...")
+            pkt = pycozmo.protocol_encoder.SetOrigin()
+            cli.conn.send(pkt)
+            print("✅ Origin set to current position")
+
+            # Register handler for robot state updates (position/orientation every 30ms)
+            # Note: EvtDelocalized not available in this pycozmo version
+            cli.add_handler(
+                pycozmo.event.EvtRobotStateUpdated,
+                display.on_robot_state
+            )
+
             print("✨ Starting display...\n")
             if display.use_3d_viewer:
                 print("🎮 3D Viewer Controls:")
@@ -531,7 +589,7 @@ def main():
                 print("   Arrow keys - Rotate camera\n")
 
             # Run display loop
-            display.run()
+            display.run(cli)
 
             print("\n✅ Display closed")
 
