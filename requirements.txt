@@ -3,3 +3,7 @@ dpkt
 numpy
 Pillow>=6.0.0
 flatbuffers
+opencv-python>=4.5.0
+scipy>=1.7.0
+PyOpenGL>=3.1.0
+pygame>=2.0.0

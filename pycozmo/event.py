@@ -19,6 +19,8 @@ __all__ = [
     "EvtRobotReady",
     "EvtPacketReceived",
     "EvtNewRawCameraImage",
+    "EvtAnnotatedCameraImage",
+    "EvtCubeDetectorDebugImages",
     "EvtRobotMovingChange",
     "EvtRobotCarryingBlockChange",
     "EvtRobotPickingOrPlacingChange",
@@ -42,6 +44,9 @@ __all__ = [
     "EvtAnimationCompleted",
     "EvtReactionTrigger",
     "EvtBehaviorDone",
+    "EvtCubeDetected",
+    "EvtCubeObserved",
+    "EvtCubeLost",
 
     "STATUS_EVENTS",
 
@@ -75,6 +80,26 @@ class EvtPacketReceived(Event):
 
 class EvtNewRawCameraImage(Event):
     """ Triggered when a new raw image is received from the robot's camera. """
+
+
+class EvtAnnotatedCameraImage(Event):
+    """
+    Triggered when a new annotated camera image is available with cube detections drawn.
+
+    Attributes:
+        image: PIL Image with detection boxes and labels
+        detections: List of CubeDetection objects
+    """
+
+
+class EvtCubeDetectorDebugImages(Event):
+    """
+    Triggered when debug images from cube detection pipeline are available.
+
+    Attributes:
+        debug_images: Dict of {step_name: image_array} containing intermediate images
+        detections: List of CubeDetection objects
+    """
 
 
 class EvtRobotMovingChange(Event):
@@ -187,6 +212,36 @@ class EvtReactionTrigger(Event):
 
 
 class EvtBehaviorDone(Event):
+    pass
+
+
+class EvtCubeDetected(Event):
+    """
+    Triggered when a cube is first detected in the camera image.
+
+    Attributes:
+        detections: List of CubeDetection objects
+    """
+    pass
+
+
+class EvtCubeObserved(Event):
+    """
+    Triggered periodically while one or more cubes are visible.
+
+    Attributes:
+        detections: List of CubeDetection objects
+    """
+    pass
+
+
+class EvtCubeLost(Event):
+    """
+    Triggered when a tracked cube is no longer visible.
+
+    Attributes:
+        cube_id: ID of the lost cube
+    """
     pass
 
 

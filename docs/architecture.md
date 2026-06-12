@@ -140,3 +140,43 @@ Events from the client layer are converted to reactions. The reaction thread rea
 queue and handles them appropriately. Reactions normally trigger behaviors.
 
 The heartbeat thread drives the personality engine and timers for activities and behaviors.
+
+
+### Computer Vision Module
+
+The CV module processes camera images from the robot to detect objects (cubes, faces, etc.) in the environment.
+
+**Recommended Architecture for Cube Detection:**
+
+The video processing and cube detection should be implemented at the **Application Layer** as a separate module:
+
+1. **Vision Module** (`pycozmo/vision.py`) - Core computer vision functionality
+   - Cube detection algorithms
+   - Image processing utilities
+   - Object tracking
+   - Can run in a separate thread for async processing
+
+2. **Integration with Brain** - The Brain class should:
+   - Subscribe to camera image events from the Client layer
+   - Pass images to the vision module for processing
+   - Convert detected objects into reactions/events
+   - Trigger appropriate behaviors based on detections
+
+3. **Event-driven Design** - New events should be added:
+   - `EvtCubeDetected` - Fired when a cube is detected
+   - `EvtCubeObserved` - Fired periodically while cube is visible
+   - `EvtCubeLost` - Fired when a tracked cube is no longer visible
+
+**Data Flow:**
+```
+Camera (Client Layer) -> EvtNewRawCameraImage -> Brain/Vision Thread -> 
+Process Image -> Detect Cubes -> Generate EvtCubeDetected -> 
+Reaction Queue -> Trigger Behavior
+```
+
+This design follows the existing architecture pattern where:
+- Client layer handles low-level robot communication and camera image reconstruction
+- Application layer (Brain + Vision) handles high-level processing
+- Events are used to communicate between components
+- Processing can be done asynchronously without blocking robot control
+
